@@ -225,6 +225,31 @@ def verify_reset_token(token, max_age=3600):
 
 
 # Routes
+@app.route('/health')
+def health_check():
+    """Temporary diagnostic endpoint - remove after debugging"""
+    try:
+        admin = User.query.filter_by(role='admin').first()
+        all_users = User.query.all()
+        db_uri = app.config['SQLALCHEMY_DATABASE_URI']
+        # Mask the password in the URI
+        if '@' in db_uri:
+            db_display = db_uri.split('://')[0] + '://*****@' + db_uri.split('@')[1]
+        else:
+            db_display = db_uri
+        return jsonify({
+            'db': db_display,
+            'total_users': len(all_users),
+            'admin_exists': admin is not None,
+            'admin_email': admin.email if admin else None,
+            'admin_email_env': os.environ.get('ADMIN_EMAIL', 'NOT SET'),
+            'admin_password_env_set': bool(os.environ.get('ADMIN_PASSWORD', '').strip()),
+            'admin_password_env_length': len(os.environ.get('ADMIN_PASSWORD', '').strip()),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/')
 def index():
     if current_user.is_authenticated:
