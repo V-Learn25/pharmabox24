@@ -1,11 +1,11 @@
 import os
+import json
 import secrets
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from functools import wraps
 from hashlib import sha256
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -34,43 +34,48 @@ login_manager.login_message = 'Please log in to access this page.'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 
+def send_email(to_email, subject, html_content):
+    """Send email via Resend API. Returns True on success."""
+    api_key = app.config.get('RESEND_API_KEY')
+    if not api_key:
+        app.logger.warning('RESEND_API_KEY not configured - skipping email')
+        return False
+
+    try:
+        payload = json.dumps({
+            'from': app.config['MAIL_FROM'],
+            'to': [to_email],
+            'subject': subject,
+            'html': html_content
+        }).encode()
+
+        req = Request(
+            'https://api.resend.com/emails',
+            data=payload,
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json'
+            },
+            method='POST'
+        )
+        urlopen(req, timeout=10)
+        app.logger.info(f'Email sent to {to_email}')
+        return True
+
+    except (URLError, Exception) as e:
+        app.logger.error(f'Failed to send email to {to_email}: {str(e)}')
+        return False
+
+
 def send_notification_email(pharmacy, stats_summary):
     """Send email notification to pharmacy about new data upload"""
     if not pharmacy.notification_email:
         return False
 
-    if not app.config.get('MAIL_USERNAME') or not app.config.get('MAIL_PASSWORD'):
-        app.logger.warning('Email not configured - skipping notification')
-        return False
+    site_url = app.config.get('SITE_URL', request.host_url.rstrip('/'))
+    login_url = f"{site_url}/login"
 
-    try:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = f'New Statistics Available - {pharmacy.name}'
-        msg['From'] = app.config['MAIL_DEFAULT_SENDER']
-        msg['To'] = pharmacy.notification_email
-
-        site_url = app.config.get('SITE_URL', 'https://neilmk.pythonanywhere.com')
-        login_url = f"{site_url}/login"
-
-        # Plain text version
-        text_content = f"""
-Hello {pharmacy.name},
-
-New statistics have been uploaded for your pharmacy.
-
-Summary for the past week:
-- Loaded: {stats_summary.get('loaded', 0)} parcels
-- Collected: {stats_summary.get('collected', 0)} parcels
-- Removed: {stats_summary.get('removed', 0)} parcels
-
-Log in to view your detailed analytics: {login_url}
-
-Best regards,
-Pharmabox24 Team
-        """
-
-        # HTML version
-        html_content = f"""
+    html_content = f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -82,7 +87,6 @@ Pharmabox24 Team
         .stats-card {{ background: white; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #00891a; }}
         .stat-value {{ font-size: 24px; font-weight: bold; color: #00891a; }}
         .btn {{ display: inline-block; background: #00891a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 15px; }}
-        .btn:hover {{ background: #006913; }}
         .footer {{ text-align: center; margin-top: 20px; color: #666; font-size: 12px; }}
     </style>
 </head>
@@ -118,25 +122,13 @@ Pharmabox24 Team
         </div>
     </div>
 </body>
-</html>
-        """
+</html>"""
 
-        msg.attach(MIMEText(text_content, 'plain'))
-        msg.attach(MIMEText(html_content, 'html'))
-
-        # Send email
-        server = smtplib.SMTP(app.config['MAIL_SERVER'], app.config['MAIL_PORT'])
-        server.starttls()
-        server.login(app.config['MAIL_USERNAME'], app.config['MAIL_PASSWORD'])
-        server.sendmail(app.config['MAIL_DEFAULT_SENDER'], pharmacy.notification_email, msg.as_string())
-        server.quit()
-
-        app.logger.info(f'Notification email sent to {pharmacy.notification_email}')
-        return True
-
-    except Exception as e:
-        app.logger.error(f'Failed to send email to {pharmacy.notification_email}: {str(e)}')
-        return False
+    return send_email(
+        pharmacy.notification_email,
+        f'New Statistics Available - {pharmacy.name}',
+        html_content
+    )
 
 
 @login_manager.user_loader
@@ -278,24 +270,7 @@ def forgot_password():
             site_url = app.config.get('SITE_URL', request.host_url.rstrip('/'))
             reset_url = f"{site_url}/reset-password/{token}"
 
-            if app.config.get('MAIL_USERNAME') and app.config.get('MAIL_PASSWORD'):
-                try:
-                    msg = MIMEMultipart('alternative')
-                    msg['Subject'] = 'Password Reset - Pharmabox24'
-                    msg['From'] = app.config['MAIL_DEFAULT_SENDER']
-                    msg['To'] = user.email
-
-                    text_content = f"""Hello {user.name},
-
-You requested a password reset. Click the link below within 1 hour:
-
-{reset_url}
-
-If you didn't request this, ignore this email.
-
-Pharmabox24 Team"""
-
-                    html_content = f"""
+            reset_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -328,17 +303,7 @@ Pharmabox24 Team"""
     </div>
 </body>
 </html>"""
-
-                    msg.attach(MIMEText(text_content, 'plain'))
-                    msg.attach(MIMEText(html_content, 'html'))
-
-                    server = smtplib.SMTP(app.config['MAIL_SERVER'], app.config['MAIL_PORT'])
-                    server.starttls()
-                    server.login(app.config['MAIL_USERNAME'], app.config['MAIL_PASSWORD'])
-                    server.sendmail(app.config['MAIL_DEFAULT_SENDER'], user.email, msg.as_string())
-                    server.quit()
-                except Exception as e:
-                    app.logger.error(f'Failed to send reset email: {str(e)}')
+            send_email(user.email, 'Password Reset - Pharmabox24', reset_html)
 
         # Always show success (don't reveal whether email exists)
         flash('If that email exists in our system, a reset link has been sent.', 'info')

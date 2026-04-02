@@ -19,13 +19,9 @@ class Config:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max upload
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
 
-    # Email configuration
-    MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.gmail.com'
-    MAIL_PORT = int(os.environ.get('MAIL_PORT') or 587)
-    MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'true').lower() in ['true', '1', 'yes']
-    MAIL_USERNAME = os.environ.get('MAIL_USERNAME')
-    MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD')
-    MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or 'noreply@pharmabox24.com'
+    # Email via Resend (https://resend.com)
+    RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+    MAIL_FROM = os.environ.get('MAIL_FROM') or 'Pharmabox24 <onboarding@resend.dev>'
 
     # Site URL for email links
     SITE_URL = os.environ.get('SITE_URL') or 'https://neilmk.pythonanywhere.com'
