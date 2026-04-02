@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Admin Dashboard</h1>
+    <p class="text-gray-500">Overview of all pharmacies</p>
+</div>
+
+<!-- Summary Cards -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+    <!-- Total Pharmacies -->
+    <div class="bg-gradient-to-br from-green-600 to-green-700 rounded-xl shadow-sm p-6 text-white">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-green-100 uppercase">Total Pharmacies</p>
+                <p class="text-3xl font-bold mt-1">{{ stats.total_pharmacies }}</p>
+            </div>
+            <div class="bg-white/20 p-3 rounded-full">
+                <i class="fas fa-store text-xl"></i>
+            </div>
+        </div>
+    </div>
+
+    <!-- Today's Collections -->
+    <div class="bg-white rounded-xl shadow-sm p-6 border-l-4 border-green-500">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-500 uppercase">Today</p>
+                <p class="text-3xl font-bold text-gray-800 mt-1">{{ stats.today.collected }}</p>
+                <p class="text-sm text-gray-500">parcels collected</p>
+            </div>
+            <div class="bg-green-100 p-3 rounded-full">
+                <i class="fas fa-box text-green-600 text-xl"></i>
+            </div>
+        </div>
+    </div>
+
+    <!-- Last 7 Days -->
+    <div class="bg-white rounded-xl shadow-sm p-6 border-l-4 border-purple-500">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-500 uppercase">Last 7 Days</p>
+                <p class="text-3xl font-bold text-gray-800 mt-1">{{ stats.week.collected }}</p>
+                <p class="text-sm text-gray-500">parcels collected</p>
+            </div>
+            <div class="bg-purple-100 p-3 rounded-full">
+                <i class="fas fa-calendar-week text-purple-600 text-xl"></i>
+            </div>
+        </div>
+    </div>
+
+    <!-- Last 30 Days -->
+    <div class="bg-white rounded-xl shadow-sm p-6 border-l-4 border-orange-500">
+        <div class="flex items-center justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-500 uppercase">Last 30 Days</p>
+                <p class="text-3xl font-bold text-gray-800 mt-1">{{ stats.month.collected }}</p>
+                <p class="text-sm text-gray-500">parcels collected</p>
+            </div>
+            <div class="bg-orange-100 p-3 rounded-full">
+                <i class="fas fa-calendar-alt text-orange-600 text-xl"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Pharmacy Summary Table -->
+    <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold text-gray-800">Pharmacy Performance</h3>
+            <a href="{{ url_for('admin_pharmacies') }}" class="text-green-600 hover:text-green-700 text-sm">
+                View All <i class="fas fa-arrow-right ml-1"></i>
+            </a>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead>
+                    <tr>
+                        <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Pharmacy</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Today</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">7 Days</th>
+                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">30 Days</th>
+                        <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for summary in pharmacy_summaries %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3">
+                            <div class="text-sm font-medium text-gray-900">{{ summary.pharmacy.name }}</div>
+                            <div class="text-xs text-gray-500">{{ summary.pharmacy.serial_number }}</div>
+                        </td>
+                        <td class="px-4 py-3 text-sm text-gray-600 text-right">{{ summary.today.collected }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600 text-right">{{ summary.week.collected }}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600 text-right">{{ summary.month.collected }}</td>
+                        <td class="px-4 py-3 text-center">
+                            <a href="{{ url_for('admin_pharmacy_view', id=summary.pharmacy.id) }}"
+                               class="text-green-600 hover:text-green-800">
+                                <i class="fas fa-eye"></i>
+                            </a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="5" class="px-4 py-8 text-center text-gray-500">
+                            No pharmacies yet. <a href="{{ url_for('admin_upload') }}" class="text-green-600">Upload data</a> to get started.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Recent Uploads -->
+    <div class="bg-white rounded-xl shadow-sm p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-semibold text-gray-800">Recent Uploads</h3>
+            <a href="{{ url_for('admin_upload') }}" class="text-green-600 hover:text-green-700 text-sm">
+                Upload <i class="fas fa-upload ml-1"></i>
+            </a>
+        </div>
+        <div class="space-y-4">
+            {% for upload in recent_uploads %}
+            <div class="flex items-start space-x-3 p-3 bg-gray-50 rounded-lg">
+                <div class="bg-green-100 p-2 rounded">
+                    <i class="fas fa-file-csv text-green-600"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm font-medium text-gray-900 truncate">{{ upload.filename }}</p>
+                    <p class="text-xs text-gray-500">{{ upload.records_imported }} records</p>
+                    <p class="text-xs text-gray-400">{{ upload.uploaded_at.strftime('%d/%m/%Y %H:%M') }}</p>
+                </div>
+            </div>
+            {% else %}
+            <p class="text-gray-500 text-sm text-center py-4">No uploads yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

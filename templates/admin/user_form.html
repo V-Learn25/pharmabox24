@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="{{ url_for('admin_users') }}" class="text-green-600 hover:text-green-800 text-sm">
+        <i class="fas fa-arrow-left mr-1"></i> Back to Users
+    </a>
+    <h1 class="text-2xl font-bold text-gray-800 mt-2">{{ title }}</h1>
+</div>
+
+<div class="max-w-xl">
+    <div class="bg-white rounded-xl shadow-sm p-6">
+        <form method="POST" class="space-y-5">
+            {{ form.hidden_tag() }}
+
+            <div>
+                <label for="name" class="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                {{ form.name(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", placeholder="e.g., John Smith") }}
+                {% for error in form.name.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                {{ form.email(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", placeholder="user@example.com") }}
+                {% for error in form.email.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-700 mb-1">
+                    Password
+                    {% if user %}<span class="text-gray-400 font-normal">(leave blank to keep current)</span>{% endif %}
+                </label>
+                {{ form.password(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", placeholder="Minimum 6 characters") }}
+                {% for error in form.password.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="role" class="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                {{ form.role(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500") }}
+                {% for error in form.role.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="pharmacy_id" class="block text-sm font-medium text-gray-700 mb-1">Assigned Pharmacy</label>
+                {{ form.pharmacy_id(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500") }}
+                {% for error in form.pharmacy_id.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+                <p class="mt-1 text-xs text-gray-500">Pharmacy users should be assigned to a specific pharmacy. Admins don't need a pharmacy assignment.</p>
+            </div>
+
+            <div class="flex space-x-3 pt-4">
+                <button type="submit" class="flex-1 flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors">
+                    <i class="fas fa-save mr-2"></i>
+                    Save User
+                </button>
+                <a href="{{ url_for('admin_users') }}" class="flex-1 flex justify-center py-2.5 px-4 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
