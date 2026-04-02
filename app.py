@@ -237,14 +237,19 @@ def health_check():
             db_display = db_uri.split('://')[0] + '://*****@' + db_uri.split('@')[1]
         else:
             db_display = db_uri
+        # Test if the env password actually verifies against the stored hash
+        env_pw = os.environ.get('ADMIN_PASSWORD', '').strip()
+        pw_verifies = admin.check_password(env_pw) if admin and env_pw else None
+
         return jsonify({
             'db': db_display,
             'total_users': len(all_users),
             'admin_exists': admin is not None,
             'admin_email': admin.email if admin else None,
             'admin_email_env': os.environ.get('ADMIN_EMAIL', 'NOT SET'),
-            'admin_password_env_set': bool(os.environ.get('ADMIN_PASSWORD', '').strip()),
-            'admin_password_env_length': len(os.environ.get('ADMIN_PASSWORD', '').strip()),
+            'admin_password_env_set': bool(env_pw),
+            'admin_password_env_length': len(env_pw),
+            'password_verifies_against_hash': pw_verifies,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
