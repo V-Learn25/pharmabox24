@@ -1122,27 +1122,42 @@ def init_db():
     with app.app_context():
         db.create_all()
 
-        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com')
-        admin_password = os.environ.get('ADMIN_PASSWORD')
+        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com').strip().lower()
+        admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
 
-        admin = User.query.filter_by(role='admin').first()
-        if not admin:
-            # Create admin on first run
-            admin = User(
-                email=admin_email,
-                name='Administrator',
-                role='admin'
-            )
-            admin.set_password(admin_password or 'changeme123')
-            db.session.add(admin)
-            db.session.commit()
-            print(f'Created default admin user: {admin_email}')
-        elif admin_password:
-            # Sync admin credentials from env vars on every startup
-            admin.email = admin_email
-            admin.set_password(admin_password)
-            db.session.commit()
-            print(f'Admin credentials synced from environment')
+        if admin_password:
+            # Force-sync admin: find by role OR email, reset password
+            admin = User.query.filter_by(role='admin').first()
+            if not admin:
+                admin = User.query.filter_by(email=admin_email).first()
+            if admin:
+                admin.email = admin_email
+                admin.role = 'admin'
+                admin.set_password(admin_password)
+                db.session.commit()
+                print(f'Admin credentials synced: {admin_email}')
+            else:
+                admin = User(
+                    email=admin_email,
+                    name='Administrator',
+                    role='admin'
+                )
+                admin.set_password(admin_password)
+                db.session.add(admin)
+                db.session.commit()
+                print(f'Created admin user: {admin_email}')
+        else:
+            # No env var — create default admin only if none exists
+            if not User.query.filter_by(role='admin').first():
+                admin = User(
+                    email=admin_email,
+                    name='Administrator',
+                    role='admin'
+                )
+                admin.set_password('changeme123')
+                db.session.add(admin)
+                db.session.commit()
+                print(f'Created default admin: {admin_email} / changeme123')
 
 
 # Initialize DB on import (for gunicorn)
