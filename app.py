@@ -1,9 +1,11 @@
 import os
+import secrets
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta, date
 from functools import wraps
+from hashlib import sha256
 
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -185,6 +187,51 @@ class ChangePasswordForm(FlaskForm):
     confirm_password = PasswordField('Confirm New Password', validators=[DataRequired()])
 
 
+class ForgotPasswordForm(FlaskForm):
+    email = EmailField('Email', validators=[DataRequired(), Email()])
+
+
+class ResetPasswordForm(FlaskForm):
+    new_password = PasswordField('New Password', validators=[DataRequired(), Length(min=6, max=100)])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired()])
+
+
+# Password reset token helpers
+def generate_reset_token(user):
+    """Generate a time-limited password reset token"""
+    timestamp = int(datetime.now().timestamp())
+    raw = f"{user.id}:{user.password_hash}:{timestamp}:{app.config['SECRET_KEY']}"
+    signature = sha256(raw.encode()).hexdigest()[:32]
+    return f"{user.id}:{timestamp}:{signature}"
+
+
+def verify_reset_token(token, max_age=3600):
+    """Verify a password reset token (default 1 hour expiry)"""
+    try:
+        parts = token.split(':')
+        if len(parts) != 3:
+            return None
+        user_id, timestamp, signature = int(parts[0]), int(parts[1]), parts[2]
+
+        # Check expiry
+        if datetime.now().timestamp() - timestamp > max_age:
+            return None
+
+        user = db.session.get(User, user_id)
+        if not user:
+            return None
+
+        # Verify signature
+        raw = f"{user.id}:{user.password_hash}:{timestamp}:{app.config['SECRET_KEY']}"
+        expected = sha256(raw.encode()).hexdigest()[:32]
+        if not secrets.compare_digest(signature, expected):
+            return None
+
+        return user
+    except (ValueError, TypeError):
+        return None
+
+
 # Routes
 @app.route('/')
 def index():
@@ -216,6 +263,112 @@ def logout():
     logout_user()
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
+
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+
+    form = ForgotPasswordForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data.lower()).first()
+        if user:
+            token = generate_reset_token(user)
+            site_url = app.config.get('SITE_URL', request.host_url.rstrip('/'))
+            reset_url = f"{site_url}/reset-password/{token}"
+
+            if app.config.get('MAIL_USERNAME') and app.config.get('MAIL_PASSWORD'):
+                try:
+                    msg = MIMEMultipart('alternative')
+                    msg['Subject'] = 'Password Reset - Pharmabox24'
+                    msg['From'] = app.config['MAIL_DEFAULT_SENDER']
+                    msg['To'] = user.email
+
+                    text_content = f"""Hello {user.name},
+
+You requested a password reset. Click the link below within 1 hour:
+
+{reset_url}
+
+If you didn't request this, ignore this email.
+
+Pharmabox24 Team"""
+
+                    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #00891a, #006913); color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
+        .content {{ background: #f9f9f9; padding: 20px; border-radius: 0 0 8px 8px; }}
+        .btn {{ display: inline-block; background: #00891a; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 15px; }}
+        .footer {{ text-align: center; margin-top: 20px; color: #666; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin: 0;">Pharmabox24</h1>
+            <p style="margin: 5px 0 0 0;">Password Reset</p>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{user.name}</strong>,</p>
+            <p>You requested a password reset. Click the button below within 1 hour to set a new password:</p>
+            <p style="text-align: center;">
+                <a href="{reset_url}" class="btn">Reset Password</a>
+            </p>
+            <p style="font-size: 12px; color: #666;">If you didn't request this, you can safely ignore this email.</p>
+        </div>
+        <div class="footer">
+            <p>Pharmabox24 - Prescription Collection Analytics Portal</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+                    msg.attach(MIMEText(text_content, 'plain'))
+                    msg.attach(MIMEText(html_content, 'html'))
+
+                    server = smtplib.SMTP(app.config['MAIL_SERVER'], app.config['MAIL_PORT'])
+                    server.starttls()
+                    server.login(app.config['MAIL_USERNAME'], app.config['MAIL_PASSWORD'])
+                    server.sendmail(app.config['MAIL_DEFAULT_SENDER'], user.email, msg.as_string())
+                    server.quit()
+                except Exception as e:
+                    app.logger.error(f'Failed to send reset email: {str(e)}')
+
+        # Always show success (don't reveal whether email exists)
+        flash('If that email exists in our system, a reset link has been sent.', 'info')
+        return redirect(url_for('login'))
+
+    return render_template('forgot_password.html', form=form)
+
+
+@app.route('/reset-password/<token>', methods=['GET', 'POST'])
+def reset_password(token):
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+
+    user = verify_reset_token(token)
+    if not user:
+        flash('Invalid or expired reset link. Please request a new one.', 'error')
+        return redirect(url_for('forgot_password'))
+
+    form = ResetPasswordForm()
+    if form.validate_on_submit():
+        if form.new_password.data != form.confirm_password.data:
+            flash('Passwords do not match.', 'error')
+            return render_template('reset_password.html', form=form, token=token)
+
+        user.set_password(form.new_password.data)
+        db.session.commit()
+        flash('Your password has been reset. Please log in.', 'success')
+        return redirect(url_for('login'))
+
+    return render_template('reset_password.html', form=form, token=token)
 
 
 @app.route('/change-password', methods=['GET', 'POST'])
@@ -1004,19 +1157,27 @@ def init_db():
     with app.app_context():
         db.create_all()
 
-        # Create default admin if none exists
-        if not User.query.filter_by(role='admin').first():
-            admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com')
-            admin_password = os.environ.get('ADMIN_PASSWORD', 'changeme123')
+        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com')
+        admin_password = os.environ.get('ADMIN_PASSWORD')
+
+        admin = User.query.filter_by(role='admin').first()
+        if not admin:
+            # Create admin on first run
             admin = User(
                 email=admin_email,
                 name='Administrator',
                 role='admin'
             )
-            admin.set_password(admin_password)
+            admin.set_password(admin_password or 'changeme123')
             db.session.add(admin)
             db.session.commit()
             print(f'Created default admin user: {admin_email}')
+        elif admin_password:
+            # Sync admin credentials from env vars on every startup
+            admin.email = admin_email
+            admin.set_password(admin_password)
+            db.session.commit()
+            print(f'Admin credentials synced from environment')
 
 
 # Initialize DB on import (for gunicorn)
