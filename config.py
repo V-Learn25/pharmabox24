@@ -24,4 +24,4 @@ class Config:
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'Pharmabox24 <onboarding@resend.dev>'
 
     # Site URL for email links
-    SITE_URL = os.environ.get('SITE_URL') or 'https://neilmk.pythonanywhere.com'
+    SITE_URL = os.environ.get('SITE_URL', '')
