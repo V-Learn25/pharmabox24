@@ -9,7 +9,7 @@ from hashlib import sha256
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-from flask import Flask, render_template, redirect, url_for, flash, request, jsonify
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.file import FileField, FileRequired, FileAllowed
@@ -20,7 +20,7 @@ from openpyxl import load_workbook
 import csv
 
 from config import Config
-from models import db, User, Pharmacy, DailyStat, HourlyDistribution, Upload
+from models import db, User, Organisation, Pharmacy, DailyStat, HourlyDistribution, Upload
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,20 @@ def load_user(user_id):
     return db.session.get(User, int(user_id))
 
 
+# --- Decorators ---
+
+def super_admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_super_admin():
+            flash('You do not have permission to access this page.', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
 def admin_required(f):
+    """Allows super_admin OR org_admin (legacy 'admin' role treated as super_admin)."""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated or not current_user.is_admin():
@@ -179,6 +192,25 @@ def admin_required(f):
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _get_org_pharmacy_ids():
+    """Get pharmacy IDs belonging to the current org_admin's organisation."""
+    if not current_user.organisation_id:
+        return []
+    return [p.id for p in Pharmacy.query.filter_by(organisation_id=current_user.organisation_id).all()]
+
+
+def _can_access_pharmacy(pharmacy_id):
+    """Check if current user can access a given pharmacy."""
+    if current_user.is_super_admin():
+        return True
+    if current_user.is_org_admin():
+        pharmacy = db.session.get(Pharmacy, pharmacy_id)
+        return pharmacy and pharmacy.organisation_id == current_user.organisation_id
+    if current_user.pharmacy_id == pharmacy_id:
+        return True
+    return False
 
 
 # Forms
@@ -191,7 +223,16 @@ class UserForm(FlaskForm):
     email = EmailField('Email', validators=[DataRequired(), Email()])
     name = StringField('Name', validators=[DataRequired(), Length(min=2, max=100)])
     password = PasswordField('Password', validators=[Length(min=6, max=100)])
-    role = SelectField('Role', choices=[('pharmacy', 'Pharmacy User'), ('admin', 'Admin')])
+    role = SelectField('Role', choices=[('pharmacy', 'Pharmacy User'), ('org_admin', 'Organisation Admin'), ('super_admin', 'Super Admin')])
+    pharmacy_id = SelectField('Pharmacy', coerce=int)
+    organisation_id = SelectField('Organisation', coerce=int)
+
+
+class OrgUserForm(FlaskForm):
+    """User form for org admins — can only create pharmacy users within their org."""
+    email = EmailField('Email', validators=[DataRequired(), Email()])
+    name = StringField('Name', validators=[DataRequired(), Length(min=2, max=100)])
+    password = PasswordField('Password', validators=[Length(min=6, max=100)])
     pharmacy_id = SelectField('Pharmacy', coerce=int)
 
 
@@ -199,6 +240,11 @@ class PharmacyForm(FlaskForm):
     serial_number = StringField('Serial Number', validators=[DataRequired(), Length(min=1, max=50)])
     name = StringField('Pharmacy Name', validators=[DataRequired(), Length(min=2, max=200)])
     notification_email = EmailField('Notification Email', validators=[Optional(), Email()])
+    organisation_id = SelectField('Organisation', coerce=int)
+
+
+class OrganisationForm(FlaskForm):
+    name = StringField('Organisation Name', validators=[DataRequired(), Length(min=2, max=200)])
 
 
 class UploadForm(FlaskForm):
@@ -240,7 +286,6 @@ def verify_reset_token(token, max_age=3600):
             return None
         user_id, timestamp, signature = int(parts[0]), int(parts[1]), parts[2]
 
-        # Check expiry
         if datetime.now().timestamp() - timestamp > max_age:
             return None
 
@@ -248,7 +293,6 @@ def verify_reset_token(token, max_age=3600):
         if not user:
             return None
 
-        # Verify signature
         raw = f"{user.id}:{user.password_hash}:{timestamp}:{app.config['SECRET_KEY']}"
         expected = sha256(raw.encode()).hexdigest()[:32]
         if not secrets.compare_digest(signature, expected):
@@ -259,7 +303,7 @@ def verify_reset_token(token, max_age=3600):
         return None
 
 
-# Routes
+# === ROUTES ===
 
 @app.route('/')
 def index():
@@ -355,7 +399,6 @@ def forgot_password():
 </html>"""
             send_email(user.email, 'Password Reset - Pharmabox24', reset_html)
 
-        # Always show success (don't reveal whether email exists)
         flash('If that email exists in our system, a reset link has been sent.', 'info')
         return redirect(url_for('login'))
 
@@ -392,17 +435,14 @@ def change_password():
     form = ChangePasswordForm()
 
     if form.validate_on_submit():
-        # Check current password
         if not current_user.check_password(form.current_password.data):
             flash('Current password is incorrect.', 'error')
             return render_template('change_password.html', form=form)
 
-        # Check new passwords match
         if form.new_password.data != form.confirm_password.data:
             flash('New passwords do not match.', 'error')
             return render_template('change_password.html', form=form)
 
-        # Update password
         current_user.set_password(form.new_password.data)
         db.session.commit()
         flash('Your password has been updated successfully.', 'success')
@@ -414,17 +454,22 @@ def change_password():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    if current_user.is_admin():
+    if current_user.is_super_admin():
         return redirect(url_for('admin_dashboard'))
+    if current_user.is_org_admin():
+        return redirect(url_for('org_dashboard'))
     return redirect(url_for('pharmacy_dashboard'))
 
 
-# Pharmacy User Routes
+# === PHARMACY USER ROUTES ===
+
 @app.route('/pharmacy/dashboard')
 @login_required
 def pharmacy_dashboard():
-    if current_user.is_admin():
+    if current_user.is_super_admin():
         return redirect(url_for('admin_dashboard'))
+    if current_user.is_org_admin():
+        return redirect(url_for('org_dashboard'))
 
     if not current_user.pharmacy_id:
         flash('Your account is not linked to a pharmacy. Please contact an administrator.', 'error')
@@ -432,8 +477,6 @@ def pharmacy_dashboard():
 
     pharmacy = db.session.get(Pharmacy, current_user.pharmacy_id)
     today = date.today()
-
-    # Get stats for different periods
     stats = get_pharmacy_stats(pharmacy.id, today)
 
     return render_template('pharmacy/dashboard.html', pharmacy=pharmacy, stats=stats)
@@ -442,7 +485,7 @@ def pharmacy_dashboard():
 @app.route('/api/pharmacy/chart-data')
 @login_required
 def pharmacy_chart_data():
-    if current_user.is_admin():
+    if current_user.is_super_admin() or current_user.is_org_admin():
         pharmacy_id = request.args.get('pharmacy_id', type=int)
     else:
         pharmacy_id = current_user.pharmacy_id
@@ -450,16 +493,18 @@ def pharmacy_chart_data():
     if not pharmacy_id:
         return jsonify({'error': 'No pharmacy assigned'}), 400
 
+    # Access check for org_admin
+    if current_user.is_org_admin() and not _can_access_pharmacy(pharmacy_id):
+        return jsonify({'error': 'Access denied'}), 403
+
     today = date.today()
     thirty_days_ago = today - timedelta(days=30)
 
-    # Get daily data for last 30 days
     daily_data = DailyStat.query.filter(
         DailyStat.pharmacy_id == pharmacy_id,
         DailyStat.date >= thirty_days_ago
     ).order_by(DailyStat.date).all()
 
-    # Prepare chart data
     dates = []
     loaded = []
     collected = []
@@ -471,7 +516,6 @@ def pharmacy_chart_data():
         collected.append(stat.collected_parcels)
         removed.append(stat.removed_parcels)
 
-    # Day of week aggregation
     day_of_week = {i: {'loaded': 0, 'collected': 0, 'count': 0} for i in range(7)}
     for stat in daily_data:
         dow = stat.date.weekday()
@@ -487,12 +531,10 @@ def pharmacy_chart_data():
         dow_loaded.append(round(day_of_week[i]['loaded'] / count, 1))
         dow_collected.append(round(day_of_week[i]['collected'] / count, 1))
 
-    # Get hourly distribution data (most recent month available)
     hourly_data = HourlyDistribution.query.filter(
         HourlyDistribution.pharmacy_id == pharmacy_id
     ).order_by(HourlyDistribution.month.desc()).all()
 
-    # Get unique months and use most recent
     hourly_by_period = {}
     if hourly_data:
         latest_month = hourly_data[0].month
@@ -500,12 +542,9 @@ def pharmacy_chart_data():
             if h.month == latest_month:
                 hourly_by_period[h.period] = h.collected_parcels
 
-    # Order periods correctly: 00-08, 08-12, 12-18, 18-24
     period_order = ['00-08', '08-12', '12-18', '18-24']
     hourly_labels = ['00:00-08:00', '08:00-12:00', '12:00-18:00', '18:00-24:00']
     hourly_values = [hourly_by_period.get(p, 0) for p in period_order]
-
-    # Calculate total for percentages
     hourly_total = sum(hourly_values) or 1
     hourly_percentages = [round((v / hourly_total) * 100, 1) for v in hourly_values]
 
@@ -529,25 +568,214 @@ def pharmacy_chart_data():
     })
 
 
-# Admin Routes
+# === ORGANISATION ADMIN ROUTES ===
+
+@app.route('/org/dashboard')
+@login_required
+def org_dashboard():
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    org = db.session.get(Organisation, current_user.organisation_id)
+    if not org:
+        flash('Your account is not linked to an organisation.', 'error')
+        return redirect(url_for('dashboard'))
+
+    pharmacies = Pharmacy.query.filter_by(organisation_id=org.id).order_by(Pharmacy.name).all()
+    today = date.today()
+
+    pharmacy_ids = [p.id for p in pharmacies]
+
+    # Aggregate stats across org pharmacies
+    today_stats = db.session.query(
+        db.func.sum(DailyStat.loaded_parcels),
+        db.func.sum(DailyStat.collected_parcels),
+        db.func.sum(DailyStat.removed_parcels)
+    ).filter(DailyStat.pharmacy_id.in_(pharmacy_ids), DailyStat.date == today).first() if pharmacy_ids else (0, 0, 0)
+
+    seven_days_ago = today - timedelta(days=7)
+    week_stats = db.session.query(
+        db.func.sum(DailyStat.loaded_parcels),
+        db.func.sum(DailyStat.collected_parcels),
+        db.func.sum(DailyStat.removed_parcels)
+    ).filter(DailyStat.pharmacy_id.in_(pharmacy_ids), DailyStat.date >= seven_days_ago).first() if pharmacy_ids else (0, 0, 0)
+
+    thirty_days_ago = today - timedelta(days=30)
+    month_stats = db.session.query(
+        db.func.sum(DailyStat.loaded_parcels),
+        db.func.sum(DailyStat.collected_parcels),
+        db.func.sum(DailyStat.removed_parcels)
+    ).filter(DailyStat.pharmacy_id.in_(pharmacy_ids), DailyStat.date >= thirty_days_ago).first() if pharmacy_ids else (0, 0, 0)
+
+    pharmacy_summaries = []
+    for pharmacy in pharmacies:
+        summary = get_pharmacy_stats(pharmacy.id, today)
+        summary['pharmacy'] = pharmacy
+        pharmacy_summaries.append(summary)
+
+    stats = {
+        'total_pharmacies': len(pharmacies),
+        'today': {
+            'loaded': (today_stats[0] or 0) if today_stats else 0,
+            'collected': (today_stats[1] or 0) if today_stats else 0,
+            'removed': (today_stats[2] or 0) if today_stats else 0
+        },
+        'week': {
+            'loaded': (week_stats[0] or 0) if week_stats else 0,
+            'collected': (week_stats[1] or 0) if week_stats else 0,
+            'removed': (week_stats[2] or 0) if week_stats else 0
+        },
+        'month': {
+            'loaded': (month_stats[0] or 0) if month_stats else 0,
+            'collected': (month_stats[1] or 0) if month_stats else 0,
+            'removed': (month_stats[2] or 0) if month_stats else 0
+        }
+    }
+
+    return render_template('org/dashboard.html', org=org, stats=stats, pharmacy_summaries=pharmacy_summaries)
+
+
+@app.route('/org/pharmacy/<int:id>/view')
+@login_required
+def org_pharmacy_view(id):
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    pharmacy = Pharmacy.query.get_or_404(id)
+    if pharmacy.organisation_id != current_user.organisation_id:
+        abort(403)
+
+    today = date.today()
+    stats = get_pharmacy_stats(pharmacy.id, today)
+    return render_template('org/pharmacy_view.html', pharmacy=pharmacy, stats=stats)
+
+
+@app.route('/org/users')
+@login_required
+def org_users():
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    org_pharmacy_ids = _get_org_pharmacy_ids()
+    # Show org_admin users for this org + pharmacy users linked to org pharmacies
+    users = User.query.filter(
+        db.or_(
+            User.organisation_id == current_user.organisation_id,
+            User.pharmacy_id.in_(org_pharmacy_ids) if org_pharmacy_ids else db.false()
+        )
+    ).order_by(User.name).all()
+    return render_template('org/users.html', users=users)
+
+
+@app.route('/org/user/add', methods=['GET', 'POST'])
+@login_required
+def org_user_add():
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    form = OrgUserForm()
+    org_pharmacies = Pharmacy.query.filter_by(organisation_id=current_user.organisation_id).order_by(Pharmacy.name).all()
+    form.pharmacy_id.choices = [(0, '-- No Pharmacy --')] + [(p.id, p.name) for p in org_pharmacies]
+    form.password.validators = [DataRequired(), Length(min=6, max=100)]
+
+    if form.validate_on_submit():
+        existing = User.query.filter_by(email=form.email.data.lower()).first()
+        if existing:
+            flash('A user with that email already exists.', 'error')
+            return render_template('org/user_form.html', form=form, title='Add User')
+
+        user = User(
+            email=form.email.data.lower(),
+            name=form.name.data,
+            role='pharmacy',
+            pharmacy_id=form.pharmacy_id.data if form.pharmacy_id.data != 0 else None,
+            organisation_id=current_user.organisation_id
+        )
+        user.set_password(form.password.data)
+        db.session.add(user)
+        db.session.commit()
+        flash(f'User "{user.name}" has been created.', 'success')
+        return redirect(url_for('org_users'))
+    return render_template('org/user_form.html', form=form, title='Add User')
+
+
+@app.route('/org/user/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+def org_user_edit(id):
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    user = User.query.get_or_404(id)
+    # Can only edit users in their org
+    org_pharmacy_ids = _get_org_pharmacy_ids()
+    if user.organisation_id != current_user.organisation_id and user.pharmacy_id not in org_pharmacy_ids:
+        abort(403)
+
+    form = OrgUserForm(obj=user)
+    org_pharmacies = Pharmacy.query.filter_by(organisation_id=current_user.organisation_id).order_by(Pharmacy.name).all()
+    form.pharmacy_id.choices = [(0, '-- No Pharmacy --')] + [(p.id, p.name) for p in org_pharmacies]
+
+    if form.validate_on_submit():
+        new_email = form.email.data.lower()
+        if new_email != user.email:
+            existing = User.query.filter_by(email=new_email).first()
+            if existing:
+                flash('A user with that email already exists.', 'error')
+                form.pharmacy_id.data = user.pharmacy_id or 0
+                return render_template('org/user_form.html', form=form, title='Edit User', user=user)
+
+        user.email = new_email
+        user.name = form.name.data
+        user.pharmacy_id = form.pharmacy_id.data if form.pharmacy_id.data != 0 else None
+        if form.password.data:
+            user.set_password(form.password.data)
+        db.session.commit()
+        flash(f'User "{user.name}" has been updated.', 'success')
+        return redirect(url_for('org_users'))
+
+    form.pharmacy_id.data = user.pharmacy_id or 0
+    return render_template('org/user_form.html', form=form, title='Edit User', user=user)
+
+
+@app.route('/org/user/<int:id>/delete', methods=['POST'])
+@login_required
+def org_user_delete(id):
+    if not current_user.is_org_admin():
+        return redirect(url_for('dashboard'))
+
+    user = User.query.get_or_404(id)
+    if user.id == current_user.id:
+        flash('You cannot delete your own account.', 'error')
+        return redirect(url_for('org_users'))
+
+    # Can only delete users in their org
+    org_pharmacy_ids = _get_org_pharmacy_ids()
+    if user.organisation_id != current_user.organisation_id and user.pharmacy_id not in org_pharmacy_ids:
+        abort(403)
+
+    db.session.delete(user)
+    db.session.commit()
+    flash(f'User "{user.name}" has been deleted.', 'success')
+    return redirect(url_for('org_users'))
+
+
+# === SUPER ADMIN ROUTES ===
+
 @app.route('/admin/dashboard')
 @login_required
-@admin_required
+@super_admin_required
 def admin_dashboard():
     pharmacies = Pharmacy.query.all()
     today = date.today()
 
-    # Get aggregate stats
     total_pharmacies = len(pharmacies)
 
-    # Today's totals
     today_stats = db.session.query(
         db.func.sum(DailyStat.loaded_parcels),
         db.func.sum(DailyStat.collected_parcels),
         db.func.sum(DailyStat.removed_parcels)
     ).filter(DailyStat.date == today).first()
 
-    # Last 7 days totals
     seven_days_ago = today - timedelta(days=7)
     week_stats = db.session.query(
         db.func.sum(DailyStat.loaded_parcels),
@@ -555,7 +783,6 @@ def admin_dashboard():
         db.func.sum(DailyStat.removed_parcels)
     ).filter(DailyStat.date >= seven_days_ago).first()
 
-    # Last 30 days totals
     thirty_days_ago = today - timedelta(days=30)
     month_stats = db.session.query(
         db.func.sum(DailyStat.loaded_parcels),
@@ -563,14 +790,12 @@ def admin_dashboard():
         db.func.sum(DailyStat.removed_parcels)
     ).filter(DailyStat.date >= thirty_days_ago).first()
 
-    # Per-pharmacy summary
     pharmacy_summaries = []
     for pharmacy in pharmacies:
         summary = get_pharmacy_stats(pharmacy.id, today)
         summary['pharmacy'] = pharmacy
         pharmacy_summaries.append(summary)
 
-    # Recent uploads
     recent_uploads = Upload.query.order_by(Upload.uploaded_at.desc()).limit(5).all()
 
     stats = {
@@ -600,7 +825,7 @@ def admin_dashboard():
 
 @app.route('/admin/upload', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_upload():
     form = UploadForm()
     uploads = Upload.query.order_by(Upload.uploaded_at.desc()).limit(20).all()
@@ -617,7 +842,6 @@ def admin_upload():
             if records == 0:
                 flash('No records found in file. Please check the file format matches the expected template.', 'error')
             else:
-                # Log the upload
                 upload = Upload(
                     filename=filename,
                     uploaded_by=current_user.id,
@@ -626,7 +850,6 @@ def admin_upload():
                 db.session.add(upload)
                 db.session.commit()
 
-                # Send notification emails to pharmacies with notification_email set
                 emails_sent = 0
                 for pharmacy_id, stats in affected_pharmacies.items():
                     pharmacy = db.session.get(Pharmacy, pharmacy_id)
@@ -643,7 +866,6 @@ def admin_upload():
             logger.exception(f'Error processing upload {filename}')
             flash(f'Error processing file: {str(e)}', 'error')
         finally:
-            # Clean up uploaded file to avoid filling disk
             try:
                 os.remove(filepath)
             except OSError:
@@ -654,9 +876,63 @@ def admin_upload():
     return render_template('admin/upload.html', form=form, uploads=uploads)
 
 
+# --- Organisation CRUD (super admin only) ---
+
+@app.route('/admin/organisations')
+@login_required
+@super_admin_required
+def admin_organisations():
+    organisations = Organisation.query.order_by(Organisation.name).all()
+    return render_template('admin/organisations.html', organisations=organisations)
+
+
+@app.route('/admin/organisation/add', methods=['GET', 'POST'])
+@login_required
+@super_admin_required
+def admin_organisation_add():
+    form = OrganisationForm()
+    if form.validate_on_submit():
+        org = Organisation(name=form.name.data)
+        db.session.add(org)
+        db.session.commit()
+        flash(f'Organisation "{org.name}" has been created.', 'success')
+        return redirect(url_for('admin_organisations'))
+    return render_template('admin/organisation_form.html', form=form, title='Add Organisation')
+
+
+@app.route('/admin/organisation/<int:id>/edit', methods=['GET', 'POST'])
+@login_required
+@super_admin_required
+def admin_organisation_edit(id):
+    org = Organisation.query.get_or_404(id)
+    form = OrganisationForm(obj=org)
+    if form.validate_on_submit():
+        org.name = form.name.data
+        db.session.commit()
+        flash(f'Organisation "{org.name}" has been updated.', 'success')
+        return redirect(url_for('admin_organisations'))
+    return render_template('admin/organisation_form.html', form=form, title='Edit Organisation', org=org)
+
+
+@app.route('/admin/organisation/<int:id>/delete', methods=['POST'])
+@login_required
+@super_admin_required
+def admin_organisation_delete(id):
+    org = Organisation.query.get_or_404(id)
+    # Unlink pharmacies and users
+    Pharmacy.query.filter_by(organisation_id=id).update({'organisation_id': None})
+    User.query.filter_by(organisation_id=id).update({'organisation_id': None})
+    db.session.delete(org)
+    db.session.commit()
+    flash(f'Organisation "{org.name}" has been deleted.', 'success')
+    return redirect(url_for('admin_organisations'))
+
+
+# --- Pharmacy CRUD (super admin) ---
+
 @app.route('/admin/pharmacies')
 @login_required
-@admin_required
+@super_admin_required
 def admin_pharmacies():
     pharmacies = Pharmacy.query.order_by(Pharmacy.name).all()
     return render_template('admin/pharmacies.html', pharmacies=pharmacies)
@@ -664,9 +940,12 @@ def admin_pharmacies():
 
 @app.route('/admin/pharmacy/add', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_pharmacy_add():
     form = PharmacyForm()
+    form.organisation_id.choices = [(0, '-- No Organisation --')] + [
+        (o.id, o.name) for o in Organisation.query.order_by(Organisation.name).all()
+    ]
     if form.validate_on_submit():
         existing = Pharmacy.query.filter_by(serial_number=form.serial_number.data).first()
         if existing:
@@ -676,7 +955,8 @@ def admin_pharmacy_add():
         pharmacy = Pharmacy(
             serial_number=form.serial_number.data,
             name=form.name.data,
-            notification_email=form.notification_email.data or None
+            notification_email=form.notification_email.data or None,
+            organisation_id=form.organisation_id.data if form.organisation_id.data != 0 else None
         )
         db.session.add(pharmacy)
         db.session.commit()
@@ -687,23 +967,28 @@ def admin_pharmacy_add():
 
 @app.route('/admin/pharmacy/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_pharmacy_edit(id):
     pharmacy = Pharmacy.query.get_or_404(id)
     form = PharmacyForm(obj=pharmacy)
+    form.organisation_id.choices = [(0, '-- No Organisation --')] + [
+        (o.id, o.name) for o in Organisation.query.order_by(Organisation.name).all()
+    ]
     if form.validate_on_submit():
         pharmacy.serial_number = form.serial_number.data
         pharmacy.name = form.name.data
         pharmacy.notification_email = form.notification_email.data or None
+        pharmacy.organisation_id = form.organisation_id.data if form.organisation_id.data != 0 else None
         db.session.commit()
         flash(f'Pharmacy "{pharmacy.name}" has been updated.', 'success')
         return redirect(url_for('admin_pharmacies'))
+    form.organisation_id.data = pharmacy.organisation_id or 0
     return render_template('admin/pharmacy_form.html', form=form, title='Edit Pharmacy', pharmacy=pharmacy)
 
 
 @app.route('/admin/pharmacy/<int:id>/view')
 @login_required
-@admin_required
+@super_admin_required
 def admin_pharmacy_view(id):
     pharmacy = Pharmacy.query.get_or_404(id)
     today = date.today()
@@ -711,30 +996,16 @@ def admin_pharmacy_view(id):
     return render_template('admin/pharmacy_view.html', pharmacy=pharmacy, stats=stats)
 
 
-@app.route('/admin/help')
-@login_required
-@admin_required
-def admin_help():
-    return render_template('admin/help.html')
-
-
 @app.route('/admin/pharmacy/<int:id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_pharmacy_delete(id):
     pharmacy = Pharmacy.query.get_or_404(id)
     pharmacy_name = pharmacy.name
 
-    # Delete related hourly distributions
     HourlyDistribution.query.filter_by(pharmacy_id=id).delete()
-
-    # Delete related daily stats
     DailyStat.query.filter_by(pharmacy_id=id).delete()
-
-    # Unlink users from this pharmacy (set pharmacy_id to NULL)
     User.query.filter_by(pharmacy_id=id).update({'pharmacy_id': None})
-
-    # Delete the pharmacy
     db.session.delete(pharmacy)
     db.session.commit()
 
@@ -742,9 +1013,11 @@ def admin_pharmacy_delete(id):
     return redirect(url_for('admin_pharmacies'))
 
 
+# --- User CRUD (super admin) ---
+
 @app.route('/admin/users')
 @login_required
-@admin_required
+@super_admin_required
 def admin_users():
     users = User.query.order_by(User.name).all()
     return render_template('admin/users.html', users=users)
@@ -752,11 +1025,14 @@ def admin_users():
 
 @app.route('/admin/user/add', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_user_add():
     form = UserForm()
     form.pharmacy_id.choices = [(0, '-- No Pharmacy --')] + [
         (p.id, p.name) for p in Pharmacy.query.order_by(Pharmacy.name).all()
+    ]
+    form.organisation_id.choices = [(0, '-- No Organisation --')] + [
+        (o.id, o.name) for o in Organisation.query.order_by(Organisation.name).all()
     ]
     form.password.validators = [DataRequired(), Length(min=6, max=100)]
 
@@ -770,7 +1046,8 @@ def admin_user_add():
             email=form.email.data.lower(),
             name=form.name.data,
             role=form.role.data,
-            pharmacy_id=form.pharmacy_id.data if form.pharmacy_id.data != 0 else None
+            pharmacy_id=form.pharmacy_id.data if form.pharmacy_id.data != 0 else None,
+            organisation_id=form.organisation_id.data if form.organisation_id.data != 0 else None
         )
         user.set_password(form.password.data)
         db.session.add(user)
@@ -782,12 +1059,15 @@ def admin_user_add():
 
 @app.route('/admin/user/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_user_edit(id):
     user = User.query.get_or_404(id)
     form = UserForm(obj=user)
     form.pharmacy_id.choices = [(0, '-- No Pharmacy --')] + [
         (p.id, p.name) for p in Pharmacy.query.order_by(Pharmacy.name).all()
+    ]
+    form.organisation_id.choices = [(0, '-- No Organisation --')] + [
+        (o.id, o.name) for o in Organisation.query.order_by(Organisation.name).all()
     ]
 
     if form.validate_on_submit():
@@ -797,12 +1077,14 @@ def admin_user_edit(id):
             if existing:
                 flash('A user with that email already exists.', 'error')
                 form.pharmacy_id.data = user.pharmacy_id or 0
+                form.organisation_id.data = user.organisation_id or 0
                 return render_template('admin/user_form.html', form=form, title='Edit User', user=user)
 
         user.email = new_email
         user.name = form.name.data
         user.role = form.role.data
         user.pharmacy_id = form.pharmacy_id.data if form.pharmacy_id.data != 0 else None
+        user.organisation_id = form.organisation_id.data if form.organisation_id.data != 0 else None
         if form.password.data:
             user.set_password(form.password.data)
         db.session.commit()
@@ -810,12 +1092,13 @@ def admin_user_edit(id):
         return redirect(url_for('admin_users'))
 
     form.pharmacy_id.data = user.pharmacy_id or 0
+    form.organisation_id.data = user.organisation_id or 0
     return render_template('admin/user_form.html', form=form, title='Edit User', user=user)
 
 
 @app.route('/admin/user/<int:id>/delete', methods=['POST'])
 @login_required
-@admin_required
+@super_admin_required
 def admin_user_delete(id):
     user = User.query.get_or_404(id)
     if user.id == current_user.id:
@@ -827,17 +1110,23 @@ def admin_user_delete(id):
     return redirect(url_for('admin_users'))
 
 
-# Helper functions
+@app.route('/admin/help')
+@login_required
+@admin_required
+def admin_help():
+    return render_template('admin/help.html')
+
+
+# === HELPER FUNCTIONS ===
+
 def get_pharmacy_stats(pharmacy_id, today):
     yesterday = today - timedelta(days=1)
     seven_days_ago = today - timedelta(days=7)
     thirty_days_ago = today - timedelta(days=30)
 
-    # Today's stats
     today_stat = DailyStat.query.filter_by(pharmacy_id=pharmacy_id, date=today).first()
     yesterday_stat = DailyStat.query.filter_by(pharmacy_id=pharmacy_id, date=yesterday).first()
 
-    # Last 7 days
     week_stats = db.session.query(
         db.func.sum(DailyStat.loaded_parcels),
         db.func.sum(DailyStat.collected_parcels),
@@ -848,7 +1137,6 @@ def get_pharmacy_stats(pharmacy_id, today):
         DailyStat.date >= seven_days_ago
     ).first()
 
-    # Last 30 days
     month_stats = db.session.query(
         db.func.sum(DailyStat.loaded_parcels),
         db.func.sum(DailyStat.collected_parcels),
@@ -859,7 +1147,6 @@ def get_pharmacy_stats(pharmacy_id, today):
         DailyStat.date >= thirty_days_ago
     ).first()
 
-    # Recent daily records
     recent_records = DailyStat.query.filter_by(pharmacy_id=pharmacy_id)\
         .order_by(DailyStat.date.desc()).limit(30).all()
 
@@ -895,7 +1182,7 @@ def get_pharmacy_stats(pharmacy_id, today):
 def process_upload(filepath, filename):
     """Process CSV or Excel file and import data. Returns (records, affected_pharmacies)"""
     records = 0
-    affected_pharmacies = {}  # {pharmacy_id: {'loaded': X, 'collected': Y, 'removed': Z}}
+    affected_pharmacies = {}
 
     if filename.endswith('.xlsx') or filename.endswith('.xls'):
         records, affected_pharmacies = process_excel(filepath)
@@ -909,25 +1196,20 @@ def process_excel(filepath):
     """Process Excel file. Returns (records, affected_pharmacies)"""
     wb = load_workbook(filepath)
     records = 0
-    affected_pharmacies = {}  # Track stats per pharmacy for notifications
+    affected_pharmacies = {}
 
     for sheet in wb.worksheets:
         all_rows = list(sheet.iter_rows(values_only=True))
 
-        # Find the daily stats header row
         daily_header_row = None
         daily_headers = {}
-
-        # Find the hourly distribution header row
         hourly_header_row = None
         hourly_headers = {}
 
         for row_idx, row in enumerate(all_rows):
             row_values = [str(v).lower() if v else '' for v in row]
 
-            # Check for "Collected Parcel Distribution" section
             if 'collected parcel distribution' in ' '.join(row_values):
-                # Next row should be the header for hourly data
                 if row_idx + 1 < len(all_rows):
                     header_row = all_rows[row_idx + 1]
                     hourly_header_row = row_idx + 1
@@ -935,14 +1217,12 @@ def process_excel(filepath):
                         if val:
                             hourly_headers[str(val).lower().strip()] = col_idx
 
-            # Check for daily stats header (S/N with Date column)
             elif 's/n' in row_values and 'date' in row_values:
                 daily_header_row = row_idx
                 for col_idx, val in enumerate(row):
                     if val:
                         daily_headers[str(val).lower().strip()] = col_idx
 
-        # Process daily stats
         if daily_header_row is not None:
             col_map = {
                 'serial': daily_headers.get('s/n', daily_headers.get('serial', -1)),
@@ -954,7 +1234,6 @@ def process_excel(filepath):
                 'reminders': daily_headers.get('reminders sum', daily_headers.get('reminders', -1))
             }
 
-            # Determine where daily stats end (at hourly section or end of data)
             end_row = hourly_header_row - 1 if hourly_header_row else len(all_rows)
 
             for row in all_rows[daily_header_row + 1:end_row]:
@@ -962,26 +1241,22 @@ def process_excel(filepath):
                     continue
 
                 serial_val = row[col_map['serial']]
-                # Handle both integer and string serial numbers
                 if isinstance(serial_val, (int, float)):
                     serial = str(int(serial_val))
                 else:
                     serial = str(serial_val).strip()
 
-                # Skip rows where serial number is not numeric
                 if not serial.isdigit():
                     continue
 
                 name = str(row[col_map['name']]).strip() if col_map['name'] >= 0 and row[col_map['name']] else serial
 
-                # Get or create pharmacy
                 pharmacy = Pharmacy.query.filter_by(serial_number=serial).first()
                 if not pharmacy:
                     pharmacy = Pharmacy(serial_number=serial, name=name)
                     db.session.add(pharmacy)
                     db.session.flush()
 
-                # Parse date
                 date_val = row[col_map['date']]
                 if isinstance(date_val, datetime):
                     stat_date = date_val.date()
@@ -990,13 +1265,11 @@ def process_excel(filepath):
                 else:
                     continue
 
-                # Get values
                 loaded = int(row[col_map['loaded']] or 0) if col_map['loaded'] >= 0 and row[col_map['loaded']] else 0
                 collected = int(row[col_map['collected']] or 0) if col_map['collected'] >= 0 and row[col_map['collected']] else 0
                 removed = int(row[col_map['removed']] or 0) if col_map['removed'] >= 0 and row[col_map['removed']] else 0
                 reminders = int(row[col_map['reminders']] or 0) if col_map['reminders'] >= 0 and row[col_map['reminders']] else 0
 
-                # Upsert daily stat
                 stat = DailyStat.query.filter_by(pharmacy_id=pharmacy.id, date=stat_date).first()
                 if stat:
                     stat.loaded_parcels = loaded
@@ -1014,7 +1287,6 @@ def process_excel(filepath):
                     )
                     db.session.add(stat)
 
-                # Track stats for notifications
                 if pharmacy.id not in affected_pharmacies:
                     affected_pharmacies[pharmacy.id] = {'loaded': 0, 'collected': 0, 'removed': 0}
                 affected_pharmacies[pharmacy.id]['loaded'] += loaded
@@ -1023,7 +1295,6 @@ def process_excel(filepath):
 
                 records += 1
 
-        # Process hourly distribution
         if hourly_header_row is not None:
             hourly_col_map = {
                 'serial': hourly_headers.get('s/n', hourly_headers.get('serial', -1)),
@@ -1032,7 +1303,6 @@ def process_excel(filepath):
                 'collected': hourly_headers.get('collected parcels', hourly_headers.get('collected', -1))
             }
 
-            # Determine month from daily stats dates or use current month
             report_month = date.today().replace(day=1)
             if daily_header_row is not None:
                 for row in all_rows[daily_header_row + 1:]:
@@ -1050,13 +1320,11 @@ def process_excel(filepath):
                     continue
 
                 serial_val = row[hourly_col_map['serial']]
-                # Handle both integer and string serial numbers
                 if isinstance(serial_val, (int, float)):
                     serial = str(int(serial_val))
                 else:
                     serial = str(serial_val).strip()
 
-                # Skip non-numeric serials
                 if not serial.isdigit():
                     continue
 
@@ -1066,7 +1334,6 @@ def process_excel(filepath):
 
                 collected = int(row[hourly_col_map['collected']] or 0) if hourly_col_map['collected'] >= 0 and row[hourly_col_map['collected']] else 0
 
-                # Get or create pharmacy
                 pharmacy = Pharmacy.query.filter_by(serial_number=serial).first()
                 if not pharmacy:
                     name = str(row[hourly_col_map['name']]).strip() if hourly_col_map['name'] >= 0 and row[hourly_col_map['name']] else serial
@@ -1074,7 +1341,6 @@ def process_excel(filepath):
                     db.session.add(pharmacy)
                     db.session.flush()
 
-                # Upsert hourly distribution
                 hourly = HourlyDistribution.query.filter_by(
                     pharmacy_id=pharmacy.id,
                     period=period,
@@ -1102,10 +1368,8 @@ def process_csv(filepath):
     affected_pharmacies = {}
 
     with open(filepath, 'r', encoding='utf-8-sig') as f:
-        # Read all lines first
         lines = f.readlines()
 
-        # Find the header row (look for 'S/N' or 'Pharmacy name')
         header_idx = None
         for idx, line in enumerate(lines):
             line_lower = line.lower()
@@ -1116,12 +1380,10 @@ def process_csv(filepath):
         if header_idx is None:
             return 0, {}
 
-        # Create a new file-like object starting from the header row
         from io import StringIO
         csv_content = ''.join(lines[header_idx:])
         reader = csv.DictReader(StringIO(csv_content))
 
-        # Normalize header names
         fieldnames = {k.lower().strip(): k for k in reader.fieldnames if k}
 
         for row in reader:
@@ -1131,25 +1393,21 @@ def process_csv(filepath):
 
             serial = str(row[serial_key]).strip()
 
-            # Skip non-numeric serial numbers (header rows, summary rows)
             if not serial.isdigit():
                 continue
 
             name_key = fieldnames.get('pharmacy name', fieldnames.get('name'))
             name = row.get(name_key, serial) if name_key else serial
 
-            # Skip if name is empty or just whitespace
             if not name or not name.strip():
                 name = serial
 
-            # Get or create pharmacy
             pharmacy = Pharmacy.query.filter_by(serial_number=serial).first()
             if not pharmacy:
                 pharmacy = Pharmacy(serial_number=serial, name=name.strip())
                 db.session.add(pharmacy)
                 db.session.flush()
 
-            # Parse date
             date_key = fieldnames.get('date')
             if not date_key or not row.get(date_key):
                 continue
@@ -1166,13 +1424,11 @@ def process_csv(filepath):
                 except ValueError:
                     continue
 
-            # Get values
             loaded = int(row.get(fieldnames.get('loaded parcels', fieldnames.get('loaded', '')), 0) or 0)
             collected = int(row.get(fieldnames.get('collected parcels', fieldnames.get('collected', '')), 0) or 0)
             removed = int(row.get(fieldnames.get('removed parcels', fieldnames.get('removed', '')), 0) or 0)
             reminders = int(row.get(fieldnames.get('reminders sum', fieldnames.get('reminders', '')), 0) or 0)
 
-            # Upsert daily stat
             stat = DailyStat.query.filter_by(pharmacy_id=pharmacy.id, date=stat_date).first()
             if stat:
                 stat.loaded_parcels = loaded
@@ -1190,7 +1446,6 @@ def process_csv(filepath):
                 )
                 db.session.add(stat)
 
-            # Track stats for notifications
             if pharmacy.id not in affected_pharmacies:
                 affected_pharmacies[pharmacy.id] = {'loaded': 0, 'collected': 0, 'removed': 0}
             affected_pharmacies[pharmacy.id]['loaded'] += loaded
@@ -1204,7 +1459,7 @@ def process_csv(filepath):
 
 
 def init_db():
-    """Initialize database with tables and default admin user"""
+    """Initialize database with tables and default super admin user"""
     with app.app_context():
         db.create_all()
 
@@ -1212,38 +1467,48 @@ def init_db():
         admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
 
         if admin_password:
-            # Force-sync admin: find by role OR email, reset password
-            admin = User.query.filter_by(role='admin').first()
+            # Migrate existing 'admin' role users to 'super_admin'
+            User.query.filter_by(role='admin').update({'role': 'super_admin'})
+            db.session.commit()
+
+            # Force-sync super admin
+            admin = User.query.filter_by(role='super_admin').first()
             if not admin:
                 admin = User.query.filter_by(email=admin_email).first()
             if admin:
                 admin.email = admin_email
-                admin.role = 'admin'
+                admin.role = 'super_admin'
                 admin.set_password(admin_password)
                 db.session.commit()
-                print(f'Admin credentials synced: {admin_email}')
+                print(f'Super admin credentials synced: {admin_email}')
             else:
                 admin = User(
                     email=admin_email,
                     name='Administrator',
-                    role='admin'
+                    role='super_admin'
                 )
                 admin.set_password(admin_password)
                 db.session.add(admin)
                 db.session.commit()
-                print(f'Created admin user: {admin_email}')
+                print(f'Created super admin user: {admin_email}')
         else:
-            # No env var — create default admin only if none exists
-            if not User.query.filter_by(role='admin').first():
-                admin = User(
-                    email=admin_email,
-                    name='Administrator',
-                    role='admin'
-                )
-                admin.set_password('changeme123')
-                db.session.add(admin)
-                db.session.commit()
-                print(f'Created default admin: {admin_email} / changeme123')
+            if not User.query.filter_by(role='super_admin').first():
+                # Also check for legacy 'admin' role
+                legacy = User.query.filter_by(role='admin').first()
+                if legacy:
+                    legacy.role = 'super_admin'
+                    db.session.commit()
+                    print(f'Migrated admin to super_admin: {legacy.email}')
+                else:
+                    admin = User(
+                        email=admin_email,
+                        name='Administrator',
+                        role='super_admin'
+                    )
+                    admin.set_password('changeme123')
+                    db.session.add(admin)
+                    db.session.commit()
+                    print(f'Created default super admin: {admin_email} / changeme123')
 
 
 # Initialize DB on import (for gunicorn)

@@ -5,6 +5,21 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
+
+class Organisation(db.Model):
+    __tablename__ = 'organisations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    pharmacies = db.relationship('Pharmacy', backref='organisation', lazy='dynamic')
+    users = db.relationship('User', backref='organisation', lazy='dynamic')
+
+    def __repr__(self):
+        return f'<Organisation {self.name}>'
+
+
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
 
@@ -12,8 +27,9 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     name = db.Column(db.String(100), nullable=False)
-    role = db.Column(db.String(20), nullable=False, default='pharmacy')  # 'admin' or 'pharmacy'
+    role = db.Column(db.String(20), nullable=False, default='pharmacy')  # 'super_admin', 'org_admin', 'pharmacy'
     pharmacy_id = db.Column(db.Integer, db.ForeignKey('pharmacies.id'), nullable=True)
+    organisation_id = db.Column(db.Integer, db.ForeignKey('organisations.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     pharmacy = db.relationship('Pharmacy', backref='users')
@@ -24,8 +40,15 @@ class User(UserMixin, db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
+    def is_super_admin(self):
+        return self.role == 'super_admin'
+
+    def is_org_admin(self):
+        return self.role == 'org_admin'
+
     def is_admin(self):
-        return self.role == 'admin'
+        """Returns True for super_admin OR org_admin (backwards compat for templates)."""
+        return self.role in ('super_admin', 'org_admin', 'admin')
 
 
 class Pharmacy(db.Model):
@@ -34,7 +57,8 @@ class Pharmacy(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     serial_number = db.Column(db.String(50), unique=True, nullable=False)
     name = db.Column(db.String(200), nullable=False)
-    notification_email = db.Column(db.String(120), nullable=True)  # Email for upload notifications
+    notification_email = db.Column(db.String(120), nullable=True)
+    organisation_id = db.Column(db.Integer, db.ForeignKey('organisations.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     daily_stats = db.relationship('DailyStat', backref='pharmacy', lazy='dynamic')
@@ -68,9 +92,9 @@ class HourlyDistribution(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     pharmacy_id = db.Column(db.Integer, db.ForeignKey('pharmacies.id'), nullable=False)
-    period = db.Column(db.String(10), nullable=False)  # '08-12', '12-18', '18-24', '00-08'
+    period = db.Column(db.String(10), nullable=False)
     collected_parcels = db.Column(db.Integer, default=0)
-    month = db.Column(db.Date, nullable=False)  # First day of the month this data represents
+    month = db.Column(db.Date, nullable=False)
 
     pharmacy = db.relationship('Pharmacy', backref='hourly_distributions')
 

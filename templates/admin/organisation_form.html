@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <a href="{{ url_for('admin_organisations') }}" class="text-green-600 hover:text-green-800 text-sm">
+        <i class="fas fa-arrow-left mr-1"></i> Back to Organisations
+    </a>
+    <h1 class="text-2xl font-bold text-gray-800 mt-2">{{ title }}</h1>
+</div>
+
+<div class="max-w-xl">
+    <div class="bg-white rounded-xl shadow-sm p-6">
+        <form method="POST" class="space-y-5">
+            {{ form.hidden_tag() }}
+
+            <div>
+                <label for="name" class="block text-sm font-medium text-gray-700 mb-1">Organisation Name</label>
+                {{ form.name(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", placeholder="e.g., MedPoint Pharmacies") }}
+                {% for error in form.name.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div class="flex space-x-3 pt-4">
+                <button type="submit" class="flex-1 flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors">
+                    <i class="fas fa-save mr-2"></i>
+                    Save Organisation
+                </button>
+                <a href="{{ url_for('admin_organisations') }}" class="flex-1 flex justify-center py-2.5 px-4 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

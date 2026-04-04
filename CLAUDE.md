@@ -40,8 +40,12 @@ Pharmabox24 — a prescription collection analytics portal for pharmacies in Ire
 
 ## Architecture
 - Monolithic Flask app (single `app.py`)
-- Role-based access: `admin` sees everything, `pharmacy` sees own dashboard
-- Data upload: admin uploads CSV/Excel → parsed → upserted into DailyStat/HourlyDistribution
+- Three-tier role system:
+  - `super_admin` — full system access (upload data, manage orgs/pharmacies/users)
+  - `org_admin` — bird's-eye view of their organisation's pharmacies, manage their own users
+  - `pharmacy` — view own pharmacy dashboard only
+- Organisation model: groups pharmacies under a parent company
+- Data upload: super admin uploads CSV/Excel → parsed → upserted into DailyStat/HourlyDistribution
 - Charts: frontend fetches `/api/pharmacy/chart-data` (JSON) → Chart.js renders
 - Password reset: token-based via email (Resend API), 1-hour expiry
 - Admin credentials force-sync from `ADMIN_EMAIL`/`ADMIN_PASSWORD` env vars on every startup

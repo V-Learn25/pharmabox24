@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Organisations - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-800">Organisations</h1>
+        <p class="text-gray-500">Manage pharmacy groups</p>
+    </div>
+    <a href="{{ url_for('admin_organisation_add') }}" class="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+        <i class="fas fa-plus mr-2"></i>
+        Add Organisation
+    </a>
+</div>
+
+<div class="bg-white rounded-xl shadow-sm">
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Organisation</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pharmacies</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Users</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200">
+                {% for org in organisations %}
+                <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <div class="flex items-center">
+                            <div class="bg-blue-100 p-2 rounded-lg mr-3">
+                                <i class="fas fa-building text-blue-600"></i>
+                            </div>
+                            <div class="text-sm font-medium text-gray-900">{{ org.name }}</div>
+                        </div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {{ org.pharmacies.count() }} pharmacy{{ '' if org.pharmacies.count() == 1 else 'ies' }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {{ org.users.count() }} user{{ '' if org.users.count() == 1 else 's' }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {{ org.created_at.strftime('%d/%m/%Y') }}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <a href="{{ url_for('admin_organisation_edit', id=org.id) }}" class="text-blue-600 hover:text-blue-800 mr-3" title="Edit">
+                            <i class="fas fa-edit"></i>
+                        </a>
+                        <form action="{{ url_for('admin_organisation_delete', id=org.id) }}" method="POST" class="inline" onsubmit="return confirm('Are you sure? Pharmacies and users will be unlinked from this organisation.');">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="text-red-600 hover:text-red-800" title="Delete">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" class="px-6 py-12 text-center text-gray-500">
+                        <i class="fas fa-building text-4xl text-gray-300 mb-3"></i>
+                        <p>No organisations yet.</p>
+                        <a href="{{ url_for('admin_organisation_add') }}" class="text-green-600">Create your first organisation</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
