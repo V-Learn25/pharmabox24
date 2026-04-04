@@ -1492,6 +1492,14 @@ def migrate_db():
                     conn.commit()
                 print('Added organisation_id to users')
 
+        # Force-migrate any remaining 'admin' role users to 'super_admin'
+        if 'users' in existing_tables:
+            with db.engine.connect() as conn:
+                result = conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
+                conn.commit()
+                if result.rowcount > 0:
+                    print(f'Migrated {result.rowcount} admin user(s) to super_admin')
+
 
 def init_db():
     """Initialize database with tables and default super admin user"""
