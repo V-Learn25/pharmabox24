@@ -457,7 +457,11 @@ def dashboard():
     if current_user.is_super_admin():
         return redirect(url_for('admin_dashboard'))
     if current_user.is_org_admin():
-        return redirect(url_for('org_dashboard'))
+        if current_user.organisation_id:
+            return redirect(url_for('org_dashboard'))
+        else:
+            flash('Your account is not linked to an organisation. Please contact a super admin.', 'error')
+            return render_template('pharmacy/dashboard.html', pharmacy=None, stats={})
     return redirect(url_for('pharmacy_dashboard'))
 
 
