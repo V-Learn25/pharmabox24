@@ -38,7 +38,7 @@
                         </div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {{ org.pharmacies.count() }} pharmacy{{ '' if org.pharmacies.count() == 1 else 'ies' }}
+                        {{ org.pharmacies.count() }} pharmac{{ 'y' if org.pharmacies.count() == 1 else 'ies' }}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                         {{ org.users.count() }} user{{ '' if org.users.count() == 1 else 's' }}
