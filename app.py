@@ -1465,35 +1465,35 @@ def process_csv(filepath):
 def migrate_db():
     """Add new columns/tables that db.create_all() misses on existing databases."""
     from sqlalchemy import text
-    try:
+    db_url = str(db.engine.url)
+    is_postgres = 'postgresql' in db_url or 'postgres' in db_url
+
+    if is_postgres:
+        # PostgreSQL supports IF NOT EXISTS — clean and atomic
         with db.engine.connect() as conn:
-            # Add organisation_id to pharmacies if missing
+            conn.execute(text('ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
+            conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
+            conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
+            conn.commit()
+            print('Migration complete (PostgreSQL)')
+    else:
+        # SQLite fallback — try/except per statement
+        with db.engine.connect() as conn:
+            for stmt in [
+                'ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)',
+                'ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)',
+            ]:
+                try:
+                    conn.execute(text(stmt))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
             try:
-                conn.execute(text('ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
+                conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
                 conn.commit()
-                print('Added organisation_id to pharmacies')
             except Exception:
                 conn.rollback()
-
-            # Add organisation_id to users if missing
-            try:
-                conn.execute(text('ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
-                conn.commit()
-                print('Added organisation_id to users')
-            except Exception:
-                conn.rollback()
-
-            # Force-migrate any remaining 'admin' role users to 'super_admin'
-            try:
-                result = conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
-                conn.commit()
-                if result.rowcount > 0:
-                    print(f'Migrated {result.rowcount} admin user(s) to super_admin')
-            except Exception:
-                conn.rollback()
-
-    except Exception as e:
-        print(f'Migration warning (non-fatal): {e}')
+            print('Migration complete (SQLite)')
 
 
 def init_db():
