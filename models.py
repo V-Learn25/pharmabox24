@@ -41,7 +41,7 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.password_hash, password)
 
     def is_super_admin(self):
-        return self.role == 'super_admin'
+        return self.role in ('super_admin', 'admin')
 
     def is_org_admin(self):
         return self.role == 'org_admin'
