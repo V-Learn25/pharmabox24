@@ -1462,83 +1462,63 @@ def process_csv(filepath):
     return records, affected_pharmacies
 
 
-def migrate_db():
-    """Add new columns/tables that db.create_all() misses on existing databases."""
-    from sqlalchemy import text
-    db_url = str(db.engine.url)
-    is_postgres = 'postgresql' in db_url or 'postgres' in db_url
-
-    if is_postgres:
-        # PostgreSQL supports IF NOT EXISTS — clean and atomic
-        with db.engine.connect() as conn:
-            conn.execute(text('ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
-            conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
-            conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
-            conn.commit()
-            print('Migration complete (PostgreSQL)')
-    else:
-        # SQLite fallback — try/except per statement
-        with db.engine.connect() as conn:
-            for stmt in [
-                'ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)',
-                'ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)',
-            ]:
-                try:
-                    conn.execute(text(stmt))
-                    conn.commit()
-                except Exception:
-                    conn.rollback()
-            try:
-                conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
-                conn.commit()
-            except Exception:
-                conn.rollback()
-            print('Migration complete (SQLite)')
-
-
 def init_db():
-    """Initialize database with tables and default super admin user"""
+    """Initialize database with tables, run migrations, sync admin user."""
+    from sqlalchemy import text
+
     with app.app_context():
-        db.create_all()
-        migrate_db()
+        try:
+            # Step 1: Migrate existing tables BEFORE db.create_all()
+            # This ensures columns exist before SQLAlchemy tries to use the ORM
+            db_url = str(db.engine.url)
+            is_postgres = 'postgresql' in db_url or 'postgres' in db_url
 
-        admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com').strip().lower()
-        admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
+            if is_postgres:
+                with db.engine.connect() as conn:
+                    # Create organisations table if it doesn't exist (raw SQL)
+                    conn.execute(text("""
+                        CREATE TABLE IF NOT EXISTS organisations (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(200) NOT NULL,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """))
+                    conn.execute(text('ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
+                    conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
+                    conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
+                    conn.commit()
+                    print('PostgreSQL migration complete')
 
-        if admin_password:
-            # Migrate existing 'admin' role users to 'super_admin'
-            User.query.filter_by(role='admin').update({'role': 'super_admin'})
-            db.session.commit()
+            # Step 2: Now safe to run create_all (new tables + ORM columns all match)
+            db.create_all()
+            print('db.create_all() complete')
 
-            # Force-sync super admin
-            admin = User.query.filter_by(role='super_admin').first()
-            if not admin:
-                admin = User.query.filter_by(email=admin_email).first()
-            if admin:
-                admin.email = admin_email
-                admin.role = 'super_admin'
-                admin.set_password(admin_password)
-                db.session.commit()
-                print(f'Super admin credentials synced: {admin_email}')
-            else:
-                admin = User(
-                    email=admin_email,
-                    name='Administrator',
-                    role='super_admin'
-                )
-                admin.set_password(admin_password)
-                db.session.add(admin)
-                db.session.commit()
-                print(f'Created super admin user: {admin_email}')
-        else:
-            if not User.query.filter_by(role='super_admin').first():
-                # Also check for legacy 'admin' role
-                legacy = User.query.filter_by(role='admin').first()
-                if legacy:
-                    legacy.role = 'super_admin'
+            # Step 3: Sync admin credentials
+            admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com').strip().lower()
+            admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
+
+            if admin_password:
+                admin = User.query.filter_by(role='super_admin').first()
+                if not admin:
+                    admin = User.query.filter_by(email=admin_email).first()
+                if admin:
+                    admin.email = admin_email
+                    admin.role = 'super_admin'
+                    admin.set_password(admin_password)
                     db.session.commit()
-                    print(f'Migrated admin to super_admin: {legacy.email}')
+                    print(f'Super admin credentials synced: {admin_email}')
                 else:
+                    admin = User(
+                        email=admin_email,
+                        name='Administrator',
+                        role='super_admin'
+                    )
+                    admin.set_password(admin_password)
+                    db.session.add(admin)
+                    db.session.commit()
+                    print(f'Created super admin user: {admin_email}')
+            else:
+                if not User.query.filter_by(role='super_admin').first():
                     admin = User(
                         email=admin_email,
                         name='Administrator',
@@ -1548,6 +1528,11 @@ def init_db():
                     db.session.add(admin)
                     db.session.commit()
                     print(f'Created default super admin: {admin_email} / changeme123')
+
+        except Exception as e:
+            print(f'init_db error: {e}')
+            import traceback
+            traceback.print_exc()
 
 
 # Initialize DB on import (for gunicorn)
