@@ -110,13 +110,40 @@ Pharmabox24 — a prescription collection analytics portal for pharmacies in Ire
 10. **Resend configured** on Railway — emails now working
 
 ### Deployment issue (4 April 2026)
-- Multiple deployments failed because `migrate_db()` crashed on startup (table/column already exists errors not caught)
-- Fixed by wrapping each ALTER TABLE in individual try/except blocks
+- Multiple deployments failed — root cause was `@csrf.error_handler` which doesn't exist in Flask-WTF 1.2.1
+- Fixed to `@app.errorhandler(CSRFError)` — the correct API
+- Also fixed: migration order (raw SQL now runs BEFORE `db.create_all()` so ORM columns match DB)
 - User manually set role to `super_admin` in database via Railway's DB console
-- **Awaiting confirmation** that latest deploy (`217fb7a`) succeeds and super admin sidebar appears
+
+## Database Backups
+- **Script:** `backup.py` in project root
+- **Method:** `pg_dump` → gzip, stored on Railway volume at `/data/backups/`
+- **Retention:** Keeps 7 most recent backups, deletes oldest automatically
+- **Alerts:** Optional email notification on failure via Resend (set `BACKUP_NOTIFY_EMAIL` env var)
+
+### Railway Setup for Backup Service
+1. In your Railway project, click **New** → **Service** → select the same GitHub repo
+2. In the new service's **Settings:**
+   - **Start Command:** `python backup.py`
+   - **Cron Schedule:** `0 2 * * *` (runs daily at 2:00 AM UTC)
+   - **Root Directory:** leave blank (same repo root)
+3. Add a **Volume** to the backup service:
+   - Mount path: `/data`
+4. Add **Environment Variables** (or share from the web service):
+   - `DATABASE_URL` — reference the PostgreSQL plugin: `${{Postgres.DATABASE_URL}}`
+   - `RESEND_API_KEY` — same as web service (optional, for failure alerts)
+   - `BACKUP_NOTIFY_EMAIL` — email address to alert on failure (optional)
+   - `MAIL_FROM` — same as web service (optional)
+5. Deploy — Railway will run the backup daily and you'll see output in the service logs
+
+### Restoring from Backup
+1. Download the backup from the Railway volume (via the service's shell)
+2. Decompress: `gunzip pharmabox24_YYYYMMDD_HHMMSS.sql.gz`
+3. Restore: `psql $DATABASE_URL < pharmabox24_YYYYMMDD_HHMMSS.sql`
 
 ## Next Steps (when development resumes)
 - **Verify deployment succeeded** — user should see Organisations in sidebar after deploy
+- **Set up backup cron service** on Railway (see instructions above)
 - **Configure custom domain** in Railway and set `SITE_URL` env var
 - **Create first organisation** — test the full flow: create org → assign pharmacies → create org admin → verify org admin dashboard
 - **Test org admin isolation** — confirm org admin cannot see other orgs' pharmacies
