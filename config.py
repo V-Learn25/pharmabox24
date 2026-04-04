@@ -17,7 +17,7 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max upload
-    PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
+    PERMANENT_SESSION_LIFETIME = timedelta(days=7)
 
     # Session cookie security
     SESSION_COOKIE_HTTPONLY = True
