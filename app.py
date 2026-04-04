@@ -12,6 +12,7 @@ from urllib.error import URLError
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm, CSRFProtect
+from flask_wtf.csrf import CSRFError
 from flask_wtf.file import FileField, FileRequired, FileAllowed
 from wtforms import StringField, PasswordField, SelectField, EmailField
 from wtforms.validators import DataRequired, Email, Length, EqualTo, Optional
@@ -35,8 +36,8 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Please log in to access this page.'
 
 
-@csrf.error_handler
-def csrf_error(reason):
+@app.errorhandler(CSRFError)
+def csrf_error(e):
     flash('Your session expired. Please try again.', 'error')
     return redirect(request.url)
 
