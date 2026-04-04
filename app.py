@@ -1462,10 +1462,42 @@ def process_csv(filepath):
     return records, affected_pharmacies
 
 
+def migrate_db():
+    """Add new columns/tables that db.create_all() misses on existing databases."""
+    from sqlalchemy import inspect, text
+    with app.app_context():
+        inspector = inspect(db.engine)
+        existing_tables = inspector.get_table_names()
+
+        # Create organisations table if missing
+        if 'organisations' not in existing_tables:
+            Organisation.__table__.create(db.engine)
+            print('Created organisations table')
+
+        # Add organisation_id to pharmacies if missing
+        if 'pharmacies' in existing_tables:
+            columns = [c['name'] for c in inspector.get_columns('pharmacies')]
+            if 'organisation_id' not in columns:
+                with db.engine.connect() as conn:
+                    conn.execute(text('ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
+                    conn.commit()
+                print('Added organisation_id to pharmacies')
+
+        # Add organisation_id to users if missing
+        if 'users' in existing_tables:
+            columns = [c['name'] for c in inspector.get_columns('users')]
+            if 'organisation_id' not in columns:
+                with db.engine.connect() as conn:
+                    conn.execute(text('ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
+                    conn.commit()
+                print('Added organisation_id to users')
+
+
 def init_db():
     """Initialize database with tables and default super admin user"""
     with app.app_context():
         db.create_all()
+        migrate_db()
 
         admin_email = os.environ.get('ADMIN_EMAIL', 'admin@pharmabox24.com').strip().lower()
         admin_password = os.environ.get('ADMIN_PASSWORD', '').strip()
