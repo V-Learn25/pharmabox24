@@ -1464,41 +1464,36 @@ def process_csv(filepath):
 
 def migrate_db():
     """Add new columns/tables that db.create_all() misses on existing databases."""
-    from sqlalchemy import inspect, text
-    with app.app_context():
-        inspector = inspect(db.engine)
-        existing_tables = inspector.get_table_names()
-
-        # Create organisations table if missing
-        if 'organisations' not in existing_tables:
-            Organisation.__table__.create(db.engine)
-            print('Created organisations table')
-
-        # Add organisation_id to pharmacies if missing
-        if 'pharmacies' in existing_tables:
-            columns = [c['name'] for c in inspector.get_columns('pharmacies')]
-            if 'organisation_id' not in columns:
-                with db.engine.connect() as conn:
-                    conn.execute(text('ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
-                    conn.commit()
+    from sqlalchemy import text
+    try:
+        with db.engine.connect() as conn:
+            # Add organisation_id to pharmacies if missing
+            try:
+                conn.execute(text('ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
+                conn.commit()
                 print('Added organisation_id to pharmacies')
+            except Exception:
+                conn.rollback()
 
-        # Add organisation_id to users if missing
-        if 'users' in existing_tables:
-            columns = [c['name'] for c in inspector.get_columns('users')]
-            if 'organisation_id' not in columns:
-                with db.engine.connect() as conn:
-                    conn.execute(text('ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
-                    conn.commit()
+            # Add organisation_id to users if missing
+            try:
+                conn.execute(text('ALTER TABLE users ADD COLUMN organisation_id INTEGER REFERENCES organisations(id)'))
+                conn.commit()
                 print('Added organisation_id to users')
+            except Exception:
+                conn.rollback()
 
-        # Force-migrate any remaining 'admin' role users to 'super_admin'
-        if 'users' in existing_tables:
-            with db.engine.connect() as conn:
+            # Force-migrate any remaining 'admin' role users to 'super_admin'
+            try:
                 result = conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
                 conn.commit()
                 if result.rowcount > 0:
                     print(f'Migrated {result.rowcount} admin user(s) to super_admin')
+            except Exception:
+                conn.rollback()
+
+    except Exception as e:
+        print(f'Migration warning (non-fatal): {e}')
 
 
 def init_db():
