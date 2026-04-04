@@ -19,6 +19,11 @@ class Config:
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max upload
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
 
+    # Session cookie security
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SECURE = bool(os.environ.get('SITE_URL', '').startswith('https'))
+
     # Email via Resend (https://resend.com)
     RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
     MAIL_FROM = os.environ.get('MAIL_FROM') or 'Pharmabox24 <onboarding@resend.dev>'

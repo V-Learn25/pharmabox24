@@ -1,6 +1,8 @@
 import os
 import json
 import secrets
+import logging
+from collections import defaultdict
 from datetime import datetime, timedelta, date
 from functools import wraps
 from hashlib import sha256
@@ -20,6 +22,8 @@ import csv
 from config import Config
 from models import db, User, Pharmacy, DailyStat, HourlyDistribution, Upload
 
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -32,6 +36,31 @@ login_manager.login_message = 'Please log in to access this page.'
 
 # Ensure upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Simple in-memory rate limiter for login/forgot-password
+_login_attempts = defaultdict(list)
+_MAX_ATTEMPTS = 10
+_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def _is_rate_limited(key):
+    """Check if key has exceeded rate limit. Cleans old entries."""
+    now = datetime.now().timestamp()
+    _login_attempts[key] = [t for t in _login_attempts[key] if now - t < _WINDOW_SECONDS]
+    return len(_login_attempts[key]) >= _MAX_ATTEMPTS
+
+
+def _record_attempt(key):
+    _login_attempts[key].append(datetime.now().timestamp())
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    return response
 
 
 def send_email(to_email, subject, html_content):
@@ -240,12 +269,20 @@ def login():
 
     form = LoginForm()
     if form.validate_on_submit():
+        client_ip = request.remote_addr or 'unknown'
+        if _is_rate_limited(f'login:{client_ip}'):
+            flash('Too many login attempts. Please wait a few minutes.', 'error')
+            return render_template('login.html', form=form)
+
         user = User.query.filter_by(email=form.email.data.lower()).first()
         if user and user.check_password(form.password.data):
             login_user(user, remember=True)
             next_page = request.args.get('next')
+            if next_page and not next_page.startswith('/'):
+                next_page = None
             flash(f'Welcome back, {user.name}!', 'success')
             return redirect(next_page or url_for('dashboard'))
+        _record_attempt(f'login:{client_ip}')
         flash('Invalid email or password.', 'error')
     return render_template('login.html', form=form)
 
@@ -265,6 +302,12 @@ def forgot_password():
 
     form = ForgotPasswordForm()
     if form.validate_on_submit():
+        client_ip = request.remote_addr or 'unknown'
+        if _is_rate_limited(f'reset:{client_ip}'):
+            flash('Too many reset requests. Please wait a few minutes.', 'error')
+            return redirect(url_for('login'))
+        _record_attempt(f'reset:{client_ip}')
+
         user = User.query.filter_by(email=form.email.data.lower()).first()
         if user:
             token = generate_reset_token(user)
@@ -565,29 +608,40 @@ def admin_upload():
         try:
             records, affected_pharmacies = process_upload(filepath, filename)
 
-            # Log the upload
-            upload = Upload(
-                filename=filename,
-                uploaded_by=current_user.id,
-                records_imported=records
-            )
-            db.session.add(upload)
-            db.session.commit()
+            if records == 0:
+                flash('No records found in file. Please check the file format matches the expected template.', 'error')
+            else:
+                # Log the upload
+                upload = Upload(
+                    filename=filename,
+                    uploaded_by=current_user.id,
+                    records_imported=records
+                )
+                db.session.add(upload)
+                db.session.commit()
 
-            # Send notification emails to pharmacies with notification_email set
-            emails_sent = 0
-            for pharmacy_id, stats in affected_pharmacies.items():
-                pharmacy = db.session.get(Pharmacy, pharmacy_id)
-                if pharmacy and pharmacy.notification_email:
-                    if send_notification_email(pharmacy, stats):
-                        emails_sent += 1
+                # Send notification emails to pharmacies with notification_email set
+                emails_sent = 0
+                for pharmacy_id, stats in affected_pharmacies.items():
+                    pharmacy = db.session.get(Pharmacy, pharmacy_id)
+                    if pharmacy and pharmacy.notification_email:
+                        if send_notification_email(pharmacy, stats):
+                            emails_sent += 1
 
-            flash(f'Successfully imported {records} records from {filename}', 'success')
-            if emails_sent > 0:
-                flash(f'Sent {emails_sent} notification email(s) to pharmacies', 'info')
+                flash(f'Successfully imported {records} records from {filename}', 'success')
+                if emails_sent > 0:
+                    flash(f'Sent {emails_sent} notification email(s) to pharmacies', 'info')
 
         except Exception as e:
+            db.session.rollback()
+            logger.exception(f'Error processing upload {filename}')
             flash(f'Error processing file: {str(e)}', 'error')
+        finally:
+            # Clean up uploaded file to avoid filling disk
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
 
         return redirect(url_for('admin_upload'))
 
@@ -608,6 +662,11 @@ def admin_pharmacies():
 def admin_pharmacy_add():
     form = PharmacyForm()
     if form.validate_on_submit():
+        existing = Pharmacy.query.filter_by(serial_number=form.serial_number.data).first()
+        if existing:
+            flash(f'A pharmacy with serial number "{form.serial_number.data}" already exists.', 'error')
+            return render_template('admin/pharmacy_form.html', form=form, title='Add Pharmacy')
+
         pharmacy = Pharmacy(
             serial_number=form.serial_number.data,
             name=form.name.data,
@@ -644,6 +703,13 @@ def admin_pharmacy_view(id):
     today = date.today()
     stats = get_pharmacy_stats(pharmacy.id, today)
     return render_template('admin/pharmacy_view.html', pharmacy=pharmacy, stats=stats)
+
+
+@app.route('/admin/help')
+@login_required
+@admin_required
+def admin_help():
+    return render_template('admin/help.html')
 
 
 @app.route('/admin/pharmacy/<int:id>/delete', methods=['POST'])
@@ -689,6 +755,11 @@ def admin_user_add():
     form.password.validators = [DataRequired(), Length(min=6, max=100)]
 
     if form.validate_on_submit():
+        existing = User.query.filter_by(email=form.email.data.lower()).first()
+        if existing:
+            flash('A user with that email already exists.', 'error')
+            return render_template('admin/user_form.html', form=form, title='Add User')
+
         user = User(
             email=form.email.data.lower(),
             name=form.name.data,
@@ -714,7 +785,15 @@ def admin_user_edit(id):
     ]
 
     if form.validate_on_submit():
-        user.email = form.email.data.lower()
+        new_email = form.email.data.lower()
+        if new_email != user.email:
+            existing = User.query.filter_by(email=new_email).first()
+            if existing:
+                flash('A user with that email already exists.', 'error')
+                form.pharmacy_id.data = user.pharmacy_id or 0
+                return render_template('admin/user_form.html', form=form, title='Edit User', user=user)
+
+        user.email = new_email
         user.name = form.name.data
         user.role = form.role.data
         user.pharmacy_id = form.pharmacy_id.data if form.pharmacy_id.data != 0 else None
@@ -1029,7 +1108,7 @@ def process_csv(filepath):
                 break
 
         if header_idx is None:
-            return 0
+            return 0, {}
 
         # Create a new file-like object starting from the header row
         from io import StringIO

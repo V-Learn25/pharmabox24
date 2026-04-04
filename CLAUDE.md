@@ -8,7 +8,7 @@ Pharmabox24 — a prescription collection analytics portal for pharmacies in Ire
 - PostgreSQL database connected via Railway plugin (`DATABASE_URL` auto-injected)
 - Admin account created and verified working (credentials from env vars)
 - Email (Resend) NOT yet configured — `RESEND_API_KEY` not set, so password reset emails won't send yet
-- No pharmacy data uploaded yet — database is empty (fresh PostgreSQL)
+- Database has live data: multiple pharmacies with weekly uploads (Weekly202608-202612.xlsx etc.)
 - Custom domain not yet configured — still on Railway's default URL
 - Debug `/health` endpoint has been removed
 

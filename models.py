@@ -56,6 +56,7 @@ class DailyStat(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('pharmacy_id', 'date', name='unique_pharmacy_date'),
+        db.Index('idx_dailystat_pharmacy_date', 'pharmacy_id', 'date'),
     )
 
     def __repr__(self):
@@ -75,6 +76,7 @@ class HourlyDistribution(db.Model):
 
     __table_args__ = (
         db.UniqueConstraint('pharmacy_id', 'period', 'month', name='unique_pharmacy_period_month'),
+        db.Index('idx_hourly_pharmacy_month', 'pharmacy_id', 'month'),
     )
 
     def __repr__(self):
