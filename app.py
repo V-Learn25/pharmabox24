@@ -292,6 +292,27 @@ def _normalize_email(value):
     return (value or '').strip().lower()[:120]
 
 
+def _format_date_range(date_from, date_to, compact=False):
+    """Render a (date_from, date_to) span for human eyes. Returns '' if either is missing.
+
+    `compact=True` produces a tighter form suitable for an email subject line:
+    "27–30 Apr 2026" when both endpoints share a month, "27 Apr – 3 May 2026"
+    when they don't. `compact=False` gives full "27 April 2026 – 3 May 2026" for
+    the body. Single-day ranges collapse to one date.
+    """
+    if not date_from or not date_to:
+        return ''
+    if date_from == date_to:
+        return date_from.strftime('%-d %b %Y' if compact else '%-d %B %Y')
+    if compact:
+        if date_from.year == date_to.year and date_from.month == date_to.month:
+            return f"{date_from.strftime('%-d')}–{date_to.strftime('%-d %b %Y')}"
+        if date_from.year == date_to.year:
+            return f"{date_from.strftime('%-d %b')} – {date_to.strftime('%-d %b %Y')}"
+        return f"{date_from.strftime('%-d %b %Y')} – {date_to.strftime('%-d %b %Y')}"
+    return f"{date_from.strftime('%-d %B %Y')} – {date_to.strftime('%-d %B %Y')}"
+
+
 def send_notification_email(pharmacy, stats_summary):
     """Send email notification to pharmacy about new data upload."""
     if not pharmacy.notification_email:
@@ -308,10 +329,24 @@ def send_notification_email(pharmacy, stats_summary):
     removed = _safe_int(stats_summary.get('removed'))
     safe_login = escape(login_url)
 
+    date_from = stats_summary.get('date_from')
+    date_to = stats_summary.get('date_to')
+    body_range = escape(_format_date_range(date_from, date_to, compact=False))
+    subject_range = _format_date_range(date_from, date_to, compact=True)
+
+    # The italic date-range line is omitted entirely when the upload had no daily rows
+    # for this pharmacy (e.g. hourly-only data) — there are no dates to honestly state.
+    range_block = (
+        f'<p style="color: #555; font-size: 14px; margin-top: -4px;">Reporting period: '
+        f'<strong>{body_range}</strong></p>'
+        if body_range else ''
+    )
+
     body = f"""
         <h2 style="color: #00891a; margin-top: 0;">New statistics available</h2>
         <p>Hello <strong>{safe_name}</strong>,</p>
         <p>New statistics have been uploaded for your pharmacy. Here's a quick summary:</p>
+        {range_block}
 
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 16px 0;">
             <tr><td style="padding: 8px 0;"><div style="background: #f4f5f7; padding: 14px 16px; border-radius: 6px; border-left: 4px solid #00891a;">
@@ -336,9 +371,12 @@ def send_notification_email(pharmacy, stats_summary):
 
     # Subject lines also surface user-controlled values — neutralise newlines/control chars.
     safe_subject_name = (pharmacy.name or '').replace('\r', ' ').replace('\n', ' ')[:120]
+    subject = f'New Statistics Available - {safe_subject_name}'
+    if subject_range:
+        subject = f'{subject} ({subject_range})'
     return send_email(
         pharmacy.notification_email,
-        f'New Statistics Available - {safe_subject_name}',
+        subject,
         html_content
     )
 
@@ -2223,7 +2261,15 @@ def process_excel(filepath):
                         db.session.add(stat)
 
                     if pharmacy.id not in affected_pharmacies:
-                        affected_pharmacies[pharmacy.id] = {'loaded': 0, 'collected': 0, 'removed': 0}
+                        affected_pharmacies[pharmacy.id] = {
+                            'loaded': 0, 'collected': 0, 'removed': 0,
+                            'date_from': stat_date, 'date_to': stat_date,
+                        }
+                    else:
+                        if stat_date < affected_pharmacies[pharmacy.id]['date_from']:
+                            affected_pharmacies[pharmacy.id]['date_from'] = stat_date
+                        if stat_date > affected_pharmacies[pharmacy.id]['date_to']:
+                            affected_pharmacies[pharmacy.id]['date_to'] = stat_date
                     affected_pharmacies[pharmacy.id]['loaded'] += loaded
                     affected_pharmacies[pharmacy.id]['collected'] += collected
                     affected_pharmacies[pharmacy.id]['removed'] += removed
@@ -2428,7 +2474,15 @@ def process_csv(filepath):
             db.session.add(stat)
 
         if pharmacy.id not in affected_pharmacies:
-            affected_pharmacies[pharmacy.id] = {'loaded': 0, 'collected': 0, 'removed': 0}
+            affected_pharmacies[pharmacy.id] = {
+                'loaded': 0, 'collected': 0, 'removed': 0,
+                'date_from': stat_date, 'date_to': stat_date,
+            }
+        else:
+            if stat_date < affected_pharmacies[pharmacy.id]['date_from']:
+                affected_pharmacies[pharmacy.id]['date_from'] = stat_date
+            if stat_date > affected_pharmacies[pharmacy.id]['date_to']:
+                affected_pharmacies[pharmacy.id]['date_to'] = stat_date
         affected_pharmacies[pharmacy.id]['loaded'] += loaded
         affected_pharmacies[pharmacy.id]['collected'] += collected
         affected_pharmacies[pharmacy.id]['removed'] += removed
