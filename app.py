@@ -2070,6 +2070,31 @@ def process_upload(filepath, filename):
     return process_csv(filepath)
 
 
+def _derive_workbook_report_month(sheets_rows):
+    """Return the first month-of-year datetime found in any sheet's daily section.
+
+    Used as a fallback when a sheet's own daily section is empty but it still
+    carries an hourly distribution block — common for pharmacies that were
+    inactive in a given week's multi-pharmacy export.
+    """
+    for _, all_rows in sheets_rows:
+        for row_idx, row in enumerate(all_rows):
+            row_values = [str(v).lower().strip() if v else '' for v in row]
+            if 's/n' not in row_values or 'date' not in row_values:
+                continue
+            date_col = row_values.index('date')
+            for sub_row in all_rows[row_idx + 1:]:
+                if not sub_row or date_col >= len(sub_row):
+                    continue
+                date_val = sub_row[date_col]
+                if isinstance(date_val, datetime):
+                    return date_val.date().replace(day=1)
+                if isinstance(date_val, date):
+                    return date_val.replace(day=1)
+            break
+    return None
+
+
 def process_excel(filepath):
     """Process Excel file. Returns (records, affected_pharmacies, skipped_rows)."""
     # read_only=True streams the underlying XML; data_only=True returns evaluated values.
@@ -2080,8 +2105,16 @@ def process_excel(filepath):
     max_rows = app.config.get('UPLOAD_MAX_ROWS', 100_000)
 
     try:
-        for sheet in wb.worksheets:
-            all_rows = _bounded_rows(sheet, max_rows)
+        # Weekly exports contain one sheet per pharmacy. Pharmacies that were inactive
+        # that week have an empty daily section but still carry an hourly distribution
+        # block — they need a reporting month sourced from sibling sheets, not their own
+        # (empty) daily rows. Materialize every sheet up front so we can compute a
+        # workbook-wide report_month BEFORE per-sheet processing.
+        sheets_rows = [(sheet, _bounded_rows(sheet, max_rows)) for sheet in wb.worksheets]
+
+        workbook_report_month = _derive_workbook_report_month(sheets_rows)
+
+        for sheet, all_rows in sheets_rows:
 
             daily_header_row = None
             daily_headers = {}
@@ -2089,7 +2122,11 @@ def process_excel(filepath):
             hourly_headers = {}
 
             for row_idx, row in enumerate(all_rows):
-                row_values = [str(v).lower() if v else '' for v in row]
+                # Strip cell values during header detection so a stray trailing space
+                # in the exporter (e.g. "Date " or "S/N ") doesn't silently make the
+                # daily section invisible. Same robustness applied a few lines down
+                # when we populate the header→column-index dict.
+                row_values = [str(v).lower().strip() if v else '' for v in row]
 
                 if 'collected parcel distribution' in ' '.join(row_values):
                     if row_idx + 1 < len(all_rows):
@@ -2117,7 +2154,14 @@ def process_excel(filepath):
                     'reminders': daily_headers.get('reminders sum', daily_headers.get('reminders', -1))
                 }
 
-                end_row = hourly_header_row - 1 if hourly_header_row else len(all_rows)
+                # Trim the daily slice at the hourly section only when hourly is BELOW
+                # daily (the normal layout). If a sheet ever inverts the order, fall back
+                # to scanning the full sheet — the per-row guards (digit serial + real
+                # datetime) reject hourly rows naturally, so no false positives.
+                if hourly_header_row and hourly_header_row > daily_header_row:
+                    end_row = hourly_header_row - 1
+                else:
+                    end_row = len(all_rows)
 
                 for row in all_rows[daily_header_row + 1:end_row]:
                     if not row or col_map['serial'] < 0 or not row[col_map['serial']]:
@@ -2196,6 +2240,8 @@ def process_excel(filepath):
 
                 # Derive report_month strictly from the daily block's parseable dates.
                 # Refuse to default to today — silently misfiling January data into February breaks analytics.
+                # Fall back to the workbook-wide month for sheets whose own daily section is empty
+                # (inactive pharmacies in a multi-pharmacy weekly export).
                 report_month = None
                 if daily_header_row is not None and col_map.get('date', -1) >= 0:
                     for row in all_rows[daily_header_row + 1:]:
@@ -2209,10 +2255,13 @@ def process_excel(filepath):
                                 break
 
                 if report_month is None:
+                    report_month = workbook_report_month
+
+                if report_month is None:
                     raise ValueError(
                         'Could not determine reporting month: no parseable Date value '
-                        'found in the daily statistics section. Add at least one row with '
-                        'a real date in the Date column and re-upload.'
+                        'found in the daily statistics section of any sheet. Add at least '
+                        'one row with a real date in the Date column and re-upload.'
                     )
 
                 for row in all_rows[hourly_header_row + 1:]:
