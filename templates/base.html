@@ -141,11 +141,21 @@
                 {% else %}
                 <!-- Pharmacy User Sidebar -->
                 <a href="{{ url_for('pharmacy_dashboard') }}"
-                   class="flex items-center px-4 py-3 text-gray-700 hover:bg-pharma-50 hover:text-pharma-700 rounded-lg mb-1 bg-pharma-50 text-pharma-700">
+                   class="flex items-center px-4 py-3 text-gray-700 hover:bg-pharma-50 hover:text-pharma-700 rounded-lg mb-1 {% if request.endpoint == 'pharmacy_dashboard' %}bg-pharma-50 text-pharma-700{% endif %}">
                     <i class="fas fa-chart-line w-5"></i>
                     <span class="ml-3">Dashboard</span>
                 </a>
                 {% endif %}
+
+                {# Shared footer link — Contact Us is available to every authenticated role. #}
+                {% if not current_user.is_super_admin() %}
+                <hr class="my-3 border-gray-200 mx-4">
+                {% endif %}
+                <a href="{{ url_for('contact') }}"
+                   class="flex items-center px-4 py-3 text-gray-700 hover:bg-pharma-50 hover:text-pharma-700 rounded-lg mb-1 {% if request.endpoint == 'contact' %}bg-pharma-50 text-pharma-700{% endif %}">
+                    <i class="fas fa-life-ring w-5"></i>
+                    <span class="ml-3">Contact Us</span>
+                </a>
             </nav>
         </aside>
 

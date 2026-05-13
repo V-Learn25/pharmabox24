@@ -23,7 +23,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import CSRFError
 from flask_wtf.file import FileField, FileRequired, FileAllowed
-from wtforms import StringField, PasswordField, SelectField, EmailField, BooleanField
+from wtforms import StringField, PasswordField, SelectField, EmailField, BooleanField, TextAreaField
 from wtforms.validators import DataRequired, Email, Length, EqualTo, Optional
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
@@ -143,19 +143,27 @@ def set_security_headers(response):
     return response
 
 
-def send_email(to_email, subject, html_content):
-    """Send email via Resend API. Returns True on success."""
+def send_email(to_email, subject, html_content, reply_to=None):
+    """Send email via Resend API. Returns True on success.
+
+    `reply_to` (optional): an email address the recipient's mail client should reply
+    to instead of MAIL_FROM. Used by the Contact form so support replies route to the
+    user who filed the ticket, not back to noreply@.
+    """
     api_key = app.config.get('RESEND_API_KEY')
     if not api_key:
         app.logger.warning('RESEND_API_KEY not configured - skipping email')
         return False
 
-    payload = json.dumps({
+    payload_dict = {
         'from': app.config['MAIL_FROM'],
         'to': [to_email],
         'subject': subject,
-        'html': html_content
-    }).encode()
+        'html': html_content,
+    }
+    if reply_to:
+        payload_dict['reply_to'] = reply_to
+    payload = json.dumps(payload_dict).encode()
 
     req = Request(
         'https://api.resend.com/emails',
@@ -405,6 +413,55 @@ def send_invitation_email(user, setup_url):
     return send_email(user.email, 'Welcome to Pharmabox24 — activate your account', html)
 
 
+def send_support_request_email(user, subject, message):
+    """Forward an in-portal Contact-Us submission to SUPPORT_EMAIL.
+
+    Reply-To is set to the requesting user so support staff can reply directly to
+    them without needing to copy/paste their address. The user identity context
+    (role, pharmacy, organisation) is included in the body so triage is fast.
+    """
+    safe_name = escape(user.name or '')
+    safe_email = escape(user.email or '')
+    safe_subject = escape(subject)
+    # Preserve line breaks in the user's message while escaping HTML.
+    safe_message = escape(message).replace('\n', '<br>')
+    role_label = (
+        'Super Administrator' if user.role == 'super_admin'
+        else 'Organisation Administrator' if user.role == 'org_admin'
+        else 'Pharmacy User'
+    )
+    pharmacy_name = escape(user.pharmacy.name) if user.pharmacy else '(not linked)'
+    org_name = escape(user.organisation.name) if user.organisation else '(not linked)'
+
+    body = f"""
+        <h2 style="color: #00891a; margin-top: 0;">Support request</h2>
+        <p style="color: #555;">Submitted via the in-portal Contact form.</p>
+        <table role="presentation" cellspacing="0" cellpadding="0" style="background: #f9fafb; border-radius: 6px; margin: 16px 0; width: 100%;">
+            <tr><td style="padding: 14px 16px; line-height: 1.8;">
+                <strong>From:</strong> {safe_name} &lt;<a href="mailto:{safe_email}" style="color: #00891a;">{safe_email}</a>&gt;<br>
+                <strong>Role:</strong> {role_label}<br>
+                <strong>Pharmacy:</strong> {pharmacy_name}<br>
+                <strong>Organisation:</strong> {org_name}
+            </td></tr>
+        </table>
+        <h3 style="color: #333; margin-bottom: 4px;">Subject</h3>
+        <p style="margin-top: 0;">{safe_subject}</p>
+        <h3 style="color: #333; margin-bottom: 4px;">Message</h3>
+        <div style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 14px 16px;">{safe_message}</div>
+        <p style="font-size: 12px; color: #888; margin-top: 24px;">Reply directly to this email to respond to {safe_name}.</p>
+    """
+    html = _email_layout(f'Support: {subject}', body)
+    # Subject prefix makes filter rules in the support inbox trivial.
+    # Strip newlines from user-supplied subject (just in case) for the email header.
+    safe_subject_header = (subject or '').replace('\r', ' ').replace('\n', ' ')[:180]
+    return send_email(
+        SUPPORT_EMAIL,
+        f'[Pharmabox24 Support] {safe_subject_header}',
+        html,
+        reply_to=user.email,
+    )
+
+
 @login_manager.user_loader
 def load_user(user_id):
     """Tolerate both legacy raw-int IDs and the new id|session_version format."""
@@ -552,6 +609,16 @@ class SetupAccountForm(FlaskForm):
     """Used by the new-user invitation flow at /setup-account/<token>."""
     new_password = PasswordField('Choose a password', validators=[DataRequired(), Length(min=_PASSWORD_MIN, max=_PASSWORD_MAX)])
     confirm_password = PasswordField('Confirm password', validators=[DataRequired()])
+
+
+class ContactForm(FlaskForm):
+    """In-portal support / contact form. Sends to SUPPORT_EMAIL."""
+    subject = StringField('Subject', validators=[DataRequired(), Length(min=3, max=200)])
+    message = TextAreaField('Message', validators=[DataRequired(), Length(min=10, max=5000)])
+
+
+# Destination for the in-portal Contact Us form.
+SUPPORT_EMAIL = 'man.info@pharmabox24.co.uk'
 
 
 # Password reset token helpers — HMAC-signed via itsdangerous, bound to the user's
@@ -860,6 +927,38 @@ def change_password():
         return redirect(url_for('dashboard'))
 
     return render_template('change_password.html', form=form)
+
+
+@app.route('/contact', methods=['GET', 'POST'])
+@login_required
+def contact():
+    """In-portal support form — emails SUPPORT_EMAIL with Reply-To set to the user."""
+    form = ContactForm()
+    if form.validate_on_submit():
+        client_ip = _client_ip()
+        # Reuse the existing per-IP rate limiter to discourage abuse / accidental spam.
+        if _is_rate_limited(f'contact:{client_ip}'):
+            flash('Too many support requests in a short period. Please wait a few minutes before trying again.', 'error')
+            return redirect(url_for('contact'))
+        _record_attempt(f'contact:{client_ip}')
+
+        subject = (form.subject.data or '').strip()
+        message = (form.message.data or '').strip()
+        try:
+            ok = send_support_request_email(current_user, subject, message)
+        except Exception:
+            app.logger.exception('Failed to send contact-us email')
+            ok = False
+
+        if ok:
+            flash("Thanks — your message has been sent. We'll get back to you shortly.", 'success')
+            return redirect(url_for('contact'))
+        flash(
+            f"Sorry, we couldn't send your message right now. Please email {SUPPORT_EMAIL} directly, "
+            "or try again in a few minutes.",
+            'error',
+        )
+    return render_template('contact.html', form=form, support_email=SUPPORT_EMAIL)
 
 
 @app.route('/dashboard')

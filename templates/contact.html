@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Contact Us - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Contact Us</h1>
+    <p class="text-gray-500">Got a question, an issue with the portal, or a request? Send us a message and we'll get back to you.</p>
+</div>
+
+<div class="max-w-2xl grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Form -->
+    <div class="lg:col-span-2 bg-white rounded-xl shadow-sm p-6">
+        <form method="POST" class="space-y-5">
+            {{ form.hidden_tag() }}
+
+            <div class="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-700">
+                <div><strong>From:</strong> {{ current_user.name }}</div>
+                <div><strong>Reply to:</strong> {{ current_user.email }}</div>
+                <p class="text-xs text-gray-500 mt-1">These details come from your account. We'll reply directly to your email address.</p>
+            </div>
+
+            <div>
+                <label for="subject" class="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                {{ form.subject(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", placeholder="e.g., Trouble uploading the weekly report") }}
+                {% for error in form.subject.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="message" class="block text-sm font-medium text-gray-700 mb-1">Message</label>
+                {{ form.message(class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500", rows=8, placeholder="Describe what you're trying to do, what happened, and anything you've already tried. Screenshots can be emailed as a reply once you receive our response.") }}
+                {% for error in form.message.errors %}
+                <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+                {% endfor %}
+                <p class="mt-1 text-xs text-gray-500">10–5000 characters.</p>
+            </div>
+
+            <button type="submit" class="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors">
+                <i class="fas fa-paper-plane mr-2"></i>
+                Send Message
+            </button>
+        </form>
+    </div>
+
+    <!-- Sidebar info -->
+    <div class="space-y-4">
+        <div class="bg-white rounded-xl shadow-sm p-6">
+            <h3 class="text-sm font-semibold text-gray-800 mb-2">
+                <i class="fas fa-envelope text-pharma-500 mr-1"></i> Direct email
+            </h3>
+            <p class="text-sm text-gray-600 break-all">
+                <a href="mailto:{{ support_email }}" class="text-green-600 hover:text-green-700">{{ support_email }}</a>
+            </p>
+            <p class="text-xs text-gray-500 mt-2">If the form fails for any reason, you can always reach us at this address directly.</p>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm p-6">
+            <h3 class="text-sm font-semibold text-gray-800 mb-2">
+                <i class="fas fa-clock text-pharma-500 mr-1"></i> Response time
+            </h3>
+            <p class="text-sm text-gray-600">We typically respond within one working day. Please include as much detail as possible to speed up triage.</p>
+        </div>
+
+        <div class="bg-white rounded-xl shadow-sm p-6">
+            <h3 class="text-sm font-semibold text-gray-800 mb-2">
+                <i class="fas fa-list text-pharma-500 mr-1"></i> What to include
+            </h3>
+            <ul class="text-sm text-gray-600 list-disc list-inside space-y-1">
+                <li>What you were trying to do</li>
+                <li>What happened instead</li>
+                <li>Any error message you saw</li>
+                <li>When it happened (rough time is fine)</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}

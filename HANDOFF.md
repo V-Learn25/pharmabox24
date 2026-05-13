@@ -214,6 +214,9 @@ Separate Railway service running `backup/backup.py` on a cron (`0 2 * * *` UTC).
 ### 5.7.5 Password length minimum is 8, not 12
 NIST SP 800-63B baseline. Rate-limiting (5/5min/IP/worker) + pbkdf2-sha256 at 600k iterations make online brute-force and offline cracking impractical at this length. Going below 8 is unsafe; going above 8 costs UX (pharmacy staff with sticky notes) for diminishing security returns.
 
+### 5.7.6 Contact Us form
+Every authenticated user has a "Contact Us" link in the sidebar that opens a support form. Submissions go to `SUPPORT_EMAIL` (currently `man.info@pharmabox24.co.uk`, hard-coded near the form classes in `app.py`) with Reply-To set to the submitting user's email — so support replies thread directly back to the user. Rate-limited per-IP (same limiter as login/forgot-password). Body includes the user's role + pharmacy + organisation for fast triage.
+
 ### 5.8 User onboarding via invitation, never admin-typed passwords
 Admins enter email + name + role; the system mails an activation link. Users set their own passwords. Reset is admin-triggered ("Send password reset" button) or user-initiated ("Forgot password" on the login page). Admin pages no longer expose a password field — see `/admin/help` (Managing Users section) for the operator-facing version of this.
 
