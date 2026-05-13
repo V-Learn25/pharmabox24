@@ -1577,12 +1577,40 @@ def admin_organisation_delete(id):
 
 # --- Pharmacy CRUD (super admin) ---
 
+def _pharmacy_data_counts(pharmacy_ids):
+    """Return {pharmacy_id: {'daily': N, 'hourly': M}} for the given pharmacy IDs.
+
+    Used to populate the type-to-confirm delete modal so the admin sees the exact
+    blast radius (how many DailyStat + HourlyDistribution rows are about to be
+    permanently erased) BEFORE typing the pharmacy name to confirm.
+    """
+    if not pharmacy_ids:
+        return {}
+    daily_counts = dict(
+        db.session.query(DailyStat.pharmacy_id, db.func.count(DailyStat.id))
+        .filter(DailyStat.pharmacy_id.in_(pharmacy_ids))
+        .group_by(DailyStat.pharmacy_id).all()
+    )
+    hourly_counts = dict(
+        db.session.query(HourlyDistribution.pharmacy_id, db.func.count(HourlyDistribution.id))
+        .filter(HourlyDistribution.pharmacy_id.in_(pharmacy_ids))
+        .group_by(HourlyDistribution.pharmacy_id).all()
+    )
+    return {
+        pid: {'daily': daily_counts.get(pid, 0), 'hourly': hourly_counts.get(pid, 0)}
+        for pid in pharmacy_ids
+    }
+
+
 @app.route('/admin/pharmacies')
 @login_required
 @super_admin_required
 def admin_pharmacies():
     pharmacies = Pharmacy.query.order_by(Pharmacy.name).all()
-    return render_template('admin/pharmacies.html', pharmacies=pharmacies)
+    delete_counts = _pharmacy_data_counts([p.id for p in pharmacies])
+    return render_template('admin/pharmacies.html',
+                           pharmacies=pharmacies,
+                           delete_counts=delete_counts)
 
 
 @app.route('/admin/pharmacy/add', methods=['GET', 'POST'])
@@ -1640,7 +1668,11 @@ def admin_pharmacy_view(id):
     pharmacy = Pharmacy.query.get_or_404(id)
     today = _today()
     stats = get_pharmacy_stats(pharmacy.id, today)
-    return render_template('admin/pharmacy_view.html', pharmacy=pharmacy, stats=stats)
+    delete_counts = _pharmacy_data_counts([pharmacy.id])
+    return render_template('admin/pharmacy_view.html',
+                           pharmacy=pharmacy,
+                           stats=stats,
+                           delete_counts=delete_counts)
 
 
 @app.route('/admin/pharmacy/<int:id>/delete', methods=['POST'])

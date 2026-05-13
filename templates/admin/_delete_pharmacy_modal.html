@@ -1,0 +1,134 @@
+{#
+    Type-to-confirm delete modal — shared by pharmacies.html (list) and
+    pharmacy_view.html (detail). Trigger buttons must carry these data attributes:
+      data-delete-pharmacy   (presence marker — no value needed)
+      data-name              the pharmacy name the user must type to confirm
+      data-daily             count of DailyStat rows that will be permanently deleted
+      data-hourly            count of HourlyDistribution rows that will be permanently deleted
+      data-url               URL to POST the delete to
+
+    Confirmation is case-sensitive and trimmed — same posture as GitHub / AWS / Stripe
+    delete-account flows. Forces the admin to look at the actual name on screen and
+    physically retype it, defeating muscle-memory click-through.
+#}
+<div id="delete-pharmacy-modal"
+     class="hidden fixed inset-0 z-50 overflow-y-auto"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="delete-pharmacy-modal-title">
+    <div class="fixed inset-0 bg-gray-900 bg-opacity-60" data-modal-backdrop></div>
+    <div class="flex min-h-full items-center justify-center p-4">
+        <div class="relative bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 z-10">
+            <div class="flex items-start mb-4">
+                <div class="bg-red-100 p-3 rounded-lg mr-4">
+                    <i class="fas fa-exclamation-triangle text-red-600 text-xl"></i>
+                </div>
+                <div class="flex-1">
+                    <h2 id="delete-pharmacy-modal-title" class="text-lg font-bold text-gray-900">
+                        Permanently delete <span data-display-name class="text-red-700"></span>?
+                    </h2>
+                    <p class="text-sm text-gray-600 mt-1">
+                        This action <strong>cannot be undone</strong>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4 text-sm text-gray-800">
+                <p class="font-semibold mb-2">The following data will be erased:</p>
+                <ul class="space-y-1 list-disc list-inside text-gray-700">
+                    <li><strong data-display-daily>0</strong> daily statistic record(s)</li>
+                    <li><strong data-display-hourly>0</strong> hourly distribution record(s)</li>
+                    <li>The pharmacy itself</li>
+                </ul>
+                <p class="text-gray-600 mt-2 text-xs">
+                    Linked users will be unlinked (not deleted) and can be reassigned.
+                </p>
+            </div>
+
+            <form id="delete-pharmacy-modal-form" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="delete-pharmacy-modal-input" class="block text-sm text-gray-700 mb-2">
+                    To confirm, type
+                    <code class="bg-gray-100 px-1.5 py-0.5 rounded text-gray-900 font-semibold" data-expected-name></code>
+                    below (case-sensitive):
+                </label>
+                <input type="text"
+                       id="delete-pharmacy-modal-input"
+                       name="confirmation"
+                       autocomplete="off"
+                       autocorrect="off"
+                       autocapitalize="off"
+                       spellcheck="false"
+                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500">
+
+                <div class="flex justify-end space-x-3 mt-5">
+                    <button type="button"
+                            data-modal-cancel
+                            class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            id="delete-pharmacy-modal-submit"
+                            disabled
+                            class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-red-600">
+                        <i class="fas fa-trash mr-2"></i>Delete pharmacy
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const modal = document.getElementById('delete-pharmacy-modal');
+    if (!modal) return;
+    const form = document.getElementById('delete-pharmacy-modal-form');
+    const input = document.getElementById('delete-pharmacy-modal-input');
+    const submitBtn = document.getElementById('delete-pharmacy-modal-submit');
+    const displayName = modal.querySelector('[data-display-name]');
+    const displayDaily = modal.querySelector('[data-display-daily]');
+    const displayHourly = modal.querySelector('[data-display-hourly]');
+    const expectedSpan = modal.querySelector('[data-expected-name]');
+    const backdrop = modal.querySelector('[data-modal-backdrop]');
+    const cancelBtn = modal.querySelector('[data-modal-cancel]');
+    let expectedName = '';
+
+    function open(btn) {
+        expectedName = btn.getAttribute('data-name') || '';
+        form.action = btn.getAttribute('data-url') || '';
+        displayName.textContent = expectedName;
+        expectedSpan.textContent = expectedName;
+        displayDaily.textContent = btn.getAttribute('data-daily') || '0';
+        displayHourly.textContent = btn.getAttribute('data-hourly') || '0';
+        input.value = '';
+        submitBtn.disabled = true;
+        modal.classList.remove('hidden');
+        document.body.style.overflow = 'hidden';
+        setTimeout(function() { input.focus(); }, 50);
+    }
+
+    function close() {
+        modal.classList.add('hidden');
+        document.body.style.overflow = '';
+        input.value = '';
+        submitBtn.disabled = true;
+    }
+
+    input.addEventListener('input', function() {
+        // Trim trailing whitespace so a stray space doesn't block a correct match,
+        // but stay case-sensitive — the whole point of this is to slow down the click.
+        submitBtn.disabled = input.value.trim() !== expectedName.trim();
+    });
+
+    cancelBtn.addEventListener('click', close);
+    backdrop.addEventListener('click', close);
+    document.addEventListener('keydown', function(e) {
+        if (!modal.classList.contains('hidden') && e.key === 'Escape') close();
+    });
+
+    document.querySelectorAll('[data-delete-pharmacy]').forEach(function(btn) {
+        btn.addEventListener('click', function() { open(btn); });
+    });
+})();
+</script>
