@@ -53,25 +53,21 @@ The first branch fires on the live DB. So you now have two super_admins:
 - (a) Demote the non-canonical one to `pharmacy`/`org_admin` via `/admin/users`, OR
 - (b) Change Railway's `ADMIN_EMAIL` env var to match the existing super_admin, restart, then demote/delete the `info@…` super_admin row.
 
-### 2.2 Email pipeline — diagnosed 2026-05-13
+### 2.2 Email pipeline — resolved 2026-05-13
 
-Verified state (from email-health probe + Resend dashboard screenshot):
-- ✅ `pharmabox24.co.uk` is verified on Resend (Ireland, eu-west-1, added ~April 2026). "Ready to send", all DNS records green.
-- ✅ `RESEND_API_KEY` set (36 chars). Likely scoped to "Sending access" only — that's why the probe's `GET /domains` returned 403. Sending will still work; only the diagnostic enumeration is blocked. Correct least-privilege posture; do not change.
-- ❌ `MAIL_FROM = Pharmabox24 <onboarding@resend.dev>` — still the **sandbox sender**. Can only deliver to the account owner. Every external send (e.g. `mark.piper1@nhs.net`) → 403.
-- ❌ `SITE_URL = https://your-app.railway.app` — placeholder from `.env.example`. Every email link is broken even when sends succeed.
+**Resolution timeline:**
+- ✅ `pharmabox24.co.uk` verified on Resend (Ireland, eu-west-1) since ~April 2026.
+- ✅ `RESEND_API_KEY` rotated 2026-05-13 (previous key leaked in a screenshot during diagnosis).
+- ✅ `MAIL_FROM` updated to use the verified `pharmabox24.co.uk` domain.
+- ✅ `SITE_URL` updated to `https://managementinfo.pharmabox24.co.uk`.
+- ✅ Dead Gmail SMTP env vars removed (`MAIL_SERVER`, `MAIL_PORT`, `MAIL_DEFAULT_SENDER` — leftover from the pre-April Resend migration; code never read them).
 
-**Fix (single restart):**
-On Railway → Variables, update:
-```
-MAIL_FROM=Pharmabox24 <noreply@pharmabox24.co.uk>
-SITE_URL=https://managementinfo.pharmabox24.co.uk
-```
-Restart the service. Hit `/admin/email-health` → "Send test email". Should land in inbox.
+**Final verification step:**
+Hit `/admin/email-health` → "Send test email" → should now land in inbox. If it doesn't, check Railway logs for `Resend HTTPError` lines (the new `send_email` captures the full response body, so the error message will be specific).
 
-(Local-part of MAIL_FROM is free choice — `noreply@`, `notifications@`, `info@` all work as long as the domain is `pharmabox24.co.uk`.)
+**NHSmail nuance:** NHSmail (the recipient at `mark.piper1@nhs.net`) is strict about inbound. SPF + DKIM are already in place via Resend's DNS records. Add a `p=none` DMARC record at `_dmarc.pharmabox24.co.uk` to get failure reports without bouncing. If the first NHS-bound send lands in junk, ask Mark to "Not junk" it once — NHSmail learns per-user.
 
-**NHSmail nuance:** NHSmail (the recipient at `mark.piper1@nhs.net`) is strict about inbound. SPF + DKIM are already in place via Resend's DNS records. Add a `p=none` DMARC record at `_dmarc.pharmabox24.co.uk` initially to get failure reports without bouncing. If the first NHS-bound send lands in junk, ask Mark to "Not junk" it once — NHSmail learns per-user.
+**Architecture note:** the app uses **Resend HTTP API only** (`urlopen` to `api.resend.com/emails` in `send_email()`). There is no SMTP path, no `smtplib`, no Flask-Mail. The Gmail SMTP env vars that lived on Railway until 2026-05-13 were inert leftover config from before the April 2 migration to Resend, not active mail routing.
 
 ---
 
