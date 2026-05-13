@@ -6,7 +6,7 @@ import secrets
 import zipfile
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from functools import wraps
 from threading import Lock
 from urllib.parse import urlparse
@@ -290,6 +290,63 @@ def _normalize_email(value):
     if not value:
         return ''
     return (value or '').strip().lower()[:120]
+
+
+def _as_utc(dt):
+    """Treat naive timestamps as UTC; pass aware ones through. SQLAlchemy returns
+    naive datetimes from Postgres TIMESTAMP columns even though we always write UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+@app.template_filter('time_since')
+def time_since_filter(dt):
+    """Render a UTC datetime as a short relative string ("2 days ago", "just now")."""
+    dt = _as_utc(dt)
+    if dt is None:
+        return ''
+    delta = datetime.now(timezone.utc) - dt
+    seconds = int(delta.total_seconds())
+    if seconds < 0:
+        return 'just now'
+    if seconds < 60:
+        return 'just now'
+    if seconds < 3600:
+        m = seconds // 60
+        return f'{m} minute{"s" if m != 1 else ""} ago'
+    if seconds < 86400:
+        h = seconds // 3600
+        return f'{h} hour{"s" if h != 1 else ""} ago'
+    days = seconds // 86400
+    if days < 30:
+        return f'{days} day{"s" if days != 1 else ""} ago'
+    months = days // 30
+    if months < 12:
+        return f'{months} month{"s" if months != 1 else ""} ago'
+    years = days // 365
+    return f'{years} year{"s" if years != 1 else ""} ago'
+
+
+def user_invite_status(user):
+    """Returns one of: 'active', 'pending', 'expired'.
+
+    'active'  — user has completed setup_account at least once.
+    'pending' — invited, still within the 7-day token window.
+    'expired' — invited, token window has lapsed (admin must resend).
+    """
+    if user.activated_at is not None:
+        return 'active'
+    created = _as_utc(user.created_at) or datetime.now(timezone.utc)
+    age = (datetime.now(timezone.utc) - created).total_seconds()
+    return 'pending' if age < _INVITE_MAX_AGE else 'expired'
+
+
+@app.context_processor
+def _inject_user_status_helpers():
+    return {'user_invite_status': user_invite_status}
 
 
 def _format_date_range(date_from, date_to, compact=False):
@@ -830,6 +887,13 @@ def login():
             # user opted in. Otherwise the cookie is browser-session-only — ideal for shared
             # pharmacy counter PCs.
             session.permanent = remember
+            now = datetime.now(timezone.utc)
+            user.last_login_at = now
+            # Backfill activation for accounts that pre-date the activated_at column.
+            # If they can log in, they've clearly activated.
+            if user.activated_at is None:
+                user.activated_at = now
+            db.session.commit()
             next_page = _safe_next(request.args.get('next'), user=user)
             flash(f'Welcome back, {user.name}!', 'success')
             return redirect(next_page or url_for('dashboard'))
@@ -893,6 +957,10 @@ def setup_account(token):
             return render_template('setup_account.html', form=form, token=token, invited_email=user.email)
 
         user.set_password(form.new_password.data)  # bumps session_version → invalidates token
+        now = datetime.now(timezone.utc)
+        if user.activated_at is None:
+            user.activated_at = now
+        user.last_login_at = now
         db.session.commit()
         # Log them in directly so they don't have to re-enter the password they just typed.
         login_user(user, remember=False)
@@ -2556,6 +2624,10 @@ def init_db():
                      'ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'),
                     ("add users.session_version",
                      "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1"),
+                    ("add users.activated_at",
+                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP NULL"),
+                    ("add users.last_login_at",
+                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL"),
                     ("migrate legacy admin role",
                      "UPDATE users SET role = 'super_admin' WHERE role = 'admin'"),
                 ]
@@ -2583,6 +2655,10 @@ def init_db():
                         conn.execute(text('ALTER TABLE users ADD COLUMN organisation_id INTEGER'))
                     if user_cols and 'session_version' not in user_cols:
                         conn.execute(text('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1'))
+                    if user_cols and 'activated_at' not in user_cols:
+                        conn.execute(text('ALTER TABLE users ADD COLUMN activated_at TIMESTAMP NULL'))
+                    if user_cols and 'last_login_at' not in user_cols:
+                        conn.execute(text('ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP NULL'))
                     if pharm_cols and 'organisation_id' not in pharm_cols:
                         conn.execute(text('ALTER TABLE pharmacies ADD COLUMN organisation_id INTEGER'))
                     if user_cols:

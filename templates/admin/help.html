@@ -130,6 +130,38 @@
             activates instantly. The invitation is valid for 7 days.
         </div>
 
+        <h3 class="font-semibold text-gray-700 mb-2">Knowing who has actually activated their account</h3>
+        <p class="text-gray-600 mb-2">
+            The Users list shows a <strong>Status</strong> column for every user so you can tell at a glance
+            who has completed setup and who is still sitting on an invitation email:
+        </p>
+        <ul class="text-gray-600 space-y-2 mb-3">
+            <li>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    <i class="fas fa-check-circle mr-1"></i> Active
+                </span>
+                <span class="ml-1">— the user has clicked their invitation link, set a password and signed in. The row also shows when they last logged in (e.g. "Last login: 2 days ago").</span>
+            </li>
+            <li>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                    <i class="fas fa-paper-plane mr-1"></i> Pending invite
+                </span>
+                <span class="ml-1">— the invitation email has been sent but they haven't set a password yet. Shows how long ago they were invited (e.g. "Invited 3 days ago"). Chase them, or use <strong>Resend invitation</strong> if they say it never arrived.</span>
+            </li>
+            <li>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    <i class="fas fa-clock mr-1"></i> Invite expired
+                </span>
+                <span class="ml-1">— more than 7 days have passed and they still haven't activated. The original link no longer works. Click <strong>Resend invitation</strong> to issue a fresh 7-day link.</span>
+            </li>
+        </ul>
+        <p class="text-gray-600 mb-4 text-sm">
+            <i class="fas fa-info-circle text-gray-400 mr-1"></i>
+            If you have users who were already using the system before this feature was added,
+            they'll show as Pending until the next time they log in — at which point the system
+            automatically marks them Active.
+        </p>
+
         <h3 class="font-semibold text-gray-700 mb-2">To create a pharmacy user:</h3>
         <ol class="list-decimal list-inside text-gray-600 space-y-2 mb-4">
             <li>Click <strong>Add User</strong>.</li>

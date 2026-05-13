@@ -33,6 +33,11 @@ class User(UserMixin, db.Model):
     # Bumped on password change / forced logout to invalidate outstanding sessions and reset tokens.
     session_version = db.Column(db.Integer, nullable=False, default=1, server_default='1')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    # Set the first time a user completes the /setup-account flow. Null = invitation
+    # sent but not yet accepted. Distinct from created_at, which fires when the admin
+    # creates the row.
+    activated_at = db.Column(db.DateTime, nullable=True)
+    last_login_at = db.Column(db.DateTime, nullable=True)
 
     pharmacy = db.relationship('Pharmacy', backref='users')
 
