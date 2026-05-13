@@ -582,6 +582,16 @@ def load_user(user_id):
     # If the cookie was issued before a force-logout / password change, reject it.
     if pinned_version is not None and (user.session_version or 1) != pinned_version:
         return None
+    # Self-heal: a user with a valid session is, by definition, activated. Backfills
+    # rows that pre-date the activated_at column (added 2026-05-13) without forcing
+    # the user to log in again. One write per user; subsequent requests no-op.
+    if user.activated_at is None:
+        try:
+            user.activated_at = datetime.now(timezone.utc)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            app.logger.exception('activated_at backfill failed for user %s', user.id)
     return user
 
 
