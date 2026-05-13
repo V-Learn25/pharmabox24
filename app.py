@@ -1366,7 +1366,7 @@ def org_user_delete(id):
 @login_required
 @super_admin_required
 def admin_dashboard():
-    pharmacies = Pharmacy.query.all()
+    pharmacies = Pharmacy.query.order_by(Pharmacy.name).all()
     today = _today()
 
     total_pharmacies = len(pharmacies)
