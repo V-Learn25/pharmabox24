@@ -52,6 +52,16 @@
                     {% endfor %}
                 </div>
 
+                <div class="flex items-center">
+                    {{ form.remember_me(class="h-4 w-4 text-green-600 border-gray-300 rounded focus:ring-green-500") }}
+                    <label for="remember_me" class="ml-2 block text-sm text-gray-700">
+                        Keep me signed in on this device
+                    </label>
+                </div>
+                <p class="text-xs text-gray-500 -mt-3">
+                    Leave unticked on shared computers — your session will end when you close the browser.
+                </p>
+
                 <button type="submit" class="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white transition-colors" style="background-color: #00891a;" onmouseover="this.style.backgroundColor='#006913'" onmouseout="this.style.backgroundColor='#00891a'">
                     <i class="fas fa-sign-in-alt mr-2"></i>
                     Sign In

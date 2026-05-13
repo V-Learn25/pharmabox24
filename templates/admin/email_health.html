@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Email Health - Pharmabox24{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-gray-800">Email Health</h1>
+    <p class="text-gray-500">Diagnose the Resend email pipeline without sending arbitrary mail.</p>
+</div>
+
+{% if test_result %}
+<div class="mb-6 p-4 rounded-lg {% if test_result.ok %}bg-green-100 text-green-800 border border-green-200{% else %}bg-red-100 text-red-800 border border-red-200{% endif %}">
+    <p class="font-semibold mb-1">
+        {% if test_result.ok %}
+            <i class="fas fa-check-circle mr-1"></i> Test email accepted
+        {% else %}
+            <i class="fas fa-circle-xmark mr-1"></i> Test email rejected
+        {% endif %}
+    </p>
+    <p class="text-sm">{{ test_result.detail }}</p>
+</div>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Config snapshot -->
+    <div class="bg-white rounded-xl shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Current Configuration</h3>
+        <dl class="space-y-3 text-sm">
+            <div>
+                <dt class="font-medium text-gray-500">MAIL_FROM</dt>
+                <dd class="text-gray-900 font-mono break-all">{{ mail_from }}</dd>
+            </div>
+            <div>
+                <dt class="font-medium text-gray-500">RESEND_API_KEY</dt>
+                <dd class="text-gray-900">
+                    {% if api_key_set %}
+                        <span class="inline-block px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs">Set</span>
+                        <span class="text-gray-500 ml-2">({{ api_key_length }} chars)</span>
+                    {% else %}
+                        <span class="inline-block px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs">Not set</span>
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="font-medium text-gray-500">SITE_URL</dt>
+                <dd class="text-gray-900 font-mono break-all">{{ site_url }}</dd>
+            </div>
+        </dl>
+
+        <hr class="my-6 border-gray-200">
+
+        <h4 class="font-medium text-gray-800 mb-2">Send a test email to yourself</h4>
+        <p class="text-sm text-gray-500 mb-3">
+            Sends to your logged-in address ({{ current_user.email }}). No other recipients possible from this page.
+        </p>
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
+                <i class="fas fa-paper-plane mr-1"></i> Send test email
+            </button>
+        </form>
+    </div>
+
+    <!-- Resend probe result -->
+    <div class="bg-white rounded-xl shadow-sm p-6">
+        <h3 class="text-lg font-semibold text-gray-800 mb-4">Resend API Probe</h3>
+
+        {% if probe_error %}
+            <div class="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm">
+                <p class="font-semibold text-red-800 mb-1">Probe failed</p>
+                <p class="text-red-700 font-mono">{{ probe_error }}</p>
+            </div>
+        {% else %}
+            <div class="mb-4 p-3 rounded-lg {% if probe_status == 200 %}bg-green-50 border border-green-200{% else %}bg-yellow-50 border border-yellow-200{% endif %} text-sm">
+                <p class="font-semibold {% if probe_status == 200 %}text-green-800{% else %}text-yellow-800{% endif %}">
+                    HTTP {{ probe_status }}
+                </p>
+            </div>
+        {% endif %}
+
+        {% if domains %}
+            <h4 class="font-medium text-gray-800 mb-2">Verified sending domains</h4>
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="text-left text-gray-500 text-xs uppercase">
+                        <th class="py-1">Domain</th>
+                        <th class="py-1">Status</th>
+                        <th class="py-1">Region</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for d in domains %}
+                    <tr>
+                        <td class="py-1.5 font-mono">{{ d.name }}</td>
+                        <td class="py-1.5">
+                            {% if d.status == 'verified' %}
+                                <span class="inline-block px-2 py-0.5 rounded bg-green-100 text-green-800 text-xs">{{ d.status }}</span>
+                            {% else %}
+                                <span class="inline-block px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 text-xs">{{ d.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="py-1.5 text-gray-600">{{ d.region }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+
+        {% if probe_body %}
+        <details class="mt-4">
+            <summary class="cursor-pointer text-sm text-gray-600 hover:text-gray-800">Raw response body</summary>
+            <pre class="mt-2 p-3 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all">{{ probe_body }}</pre>
+        </details>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Diagnostic guide -->
+<div class="bg-white rounded-xl shadow-sm p-6 mt-6">
+    <h3 class="text-lg font-semibold text-gray-800 mb-3">Reading the results</h3>
+    <ul class="text-sm text-gray-700 space-y-2 list-disc list-inside">
+        <li><strong>HTTP 200</strong> with verified domains shown = API key works. If sends still fail, the issue is with the <em>From</em> address in MAIL_FROM not matching a verified domain.</li>
+        <li><strong>HTTP 401</strong> = API key wrong, revoked, or whitespace in the env var. Regenerate on Resend → Railway → variables → restart.</li>
+        <li><strong>HTTP 403</strong> on a send to an external address = MAIL_FROM uses the sandbox sender (<code class="bg-gray-100 px-1 rounded">onboarding@resend.dev</code>) or an unverified domain. Verify your domain on Resend and update MAIL_FROM.</li>
+        <li><strong>Network error</strong> = Railway outbound networking issue. Rare; usually resolves on its own.</li>
+    </ul>
+</div>
+{% endblock %}

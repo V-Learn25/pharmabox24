@@ -4,8 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Pharmabox24{% endblock %}</title>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
-    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <script defer
+            src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"
+            integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb"
+            crossorigin="anonymous"></script>
+    <script src="https://cdn.tailwindcss.com/3.4.17"
+            integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K"
+            crossorigin="anonymous"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -28,8 +33,13 @@
             }
         }
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"
+            integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
+            crossorigin="anonymous"></script>
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+          integrity="sha384-t1nt8BQoYMLFN5p42tRAtuAAFQaCQODekUVeKKZrEnEyp4H2R0RHFz0KWpmj7i8g"
+          crossorigin="anonymous">
     <style>
         .sidebar { min-height: calc(100vh - 64px); }
         .logo-text {
@@ -111,6 +121,11 @@
                     <span class="ml-3">Users</span>
                 </a>
                 <hr class="my-3 border-gray-200 mx-4">
+                <a href="{{ url_for('admin_email_health') }}"
+                   class="flex items-center px-4 py-3 text-gray-700 hover:bg-pharma-50 hover:text-pharma-700 rounded-lg mb-1 {% if request.endpoint == 'admin_email_health' %}bg-pharma-50 text-pharma-700{% endif %}">
+                    <i class="fas fa-envelope-circle-check w-5"></i>
+                    <span class="ml-3">Email Health</span>
+                </a>
                 <a href="{{ url_for('admin_help') }}"
                    class="flex items-center px-4 py-3 text-gray-700 hover:bg-pharma-50 hover:text-pharma-700 rounded-lg mb-1 {% if request.endpoint == 'admin_help' %}bg-pharma-50 text-pharma-700{% endif %}">
                     <i class="fas fa-circle-question w-5"></i>

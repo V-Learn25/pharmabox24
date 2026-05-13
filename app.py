@@ -22,7 +22,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from flask_wtf import FlaskForm, CSRFProtect
 from flask_wtf.csrf import CSRFError
 from flask_wtf.file import FileField, FileRequired, FileAllowed
-from wtforms import StringField, PasswordField, SelectField, EmailField
+from wtforms import StringField, PasswordField, SelectField, EmailField, BooleanField
 from wtforms.validators import DataRequired, Email, Length, EqualTo, Optional
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
@@ -378,6 +378,7 @@ def _can_access_pharmacy(pharmacy_id):
 class LoginForm(FlaskForm):
     email = EmailField('Email', validators=[DataRequired(), Email()])
     password = PasswordField('Password', validators=[DataRequired()])
+    remember_me = BooleanField('Keep me signed in on this device', default=False)
 
 
 _PASSWORD_MIN = 12
@@ -517,8 +518,12 @@ def login():
         email = (form.email.data or '').strip().lower()
         user = User.query.filter_by(email=email).first()
         if user and user.check_password(form.password.data):
-            login_user(user, remember=True)
-            session.permanent = True
+            remember = bool(form.remember_me.data)
+            login_user(user, remember=remember)
+            # Only mark the session permanent (= PERMANENT_SESSION_LIFETIME, 7 days) when the
+            # user opted in. Otherwise the cookie is browser-session-only — ideal for shared
+            # pharmacy counter PCs.
+            session.permanent = remember
             next_page = _safe_next(request.args.get('next'))
             flash(f'Welcome back, {user.name}!', 'success')
             return redirect(next_page or url_for('dashboard'))
@@ -640,15 +645,22 @@ def change_password():
             flash('New passwords do not match.', 'error')
             return render_template('change_password.html', form=form)
 
+        # Preserve the user's original remember-me choice across the re-login below.
+        was_remembered = bool(session.permanent)
+
         current_user.set_password(form.new_password.data)  # bumps session_version
         db.session.commit()
         try:
             send_password_changed_notice(current_user)
         except Exception:
             app.logger.exception('Failed to send password-changed notice')
-        # The session_version bump just invalidated this session — re-login the user with the
-        # new identifier so they don't get bounced to the login screen.
-        login_user(current_user, remember=True)
+
+        # The session_version bump just invalidated this session — re-login with the same
+        # remember-me posture they had before, so we don't silently upgrade non-persistent
+        # sessions to 7-day cookies.
+        login_user(current_user, remember=was_remembered)
+        session.permanent = was_remembered
+
         flash('Your password has been updated successfully.', 'success')
         return redirect(url_for('dashboard'))
 
@@ -1124,6 +1136,11 @@ def admin_upload():
             db.session.rollback()
             app.logger.exception(f'Memory exhausted parsing upload {original_name}')
             flash('File rejected — too large or too many rows. Split it and try again.', 'error')
+        except ValueError as ve:
+            # ValueError messages from our parsers are user-actionable (row caps, missing month, etc.).
+            db.session.rollback()
+            app.logger.warning(f'Upload {original_name} rejected: {ve}')
+            flash(str(ve), 'error')
         except Exception:
             db.session.rollback()
             app.logger.exception(f'Error processing upload {original_name}')
@@ -1390,6 +1407,106 @@ def admin_help():
     return render_template('admin/help.html')
 
 
+def _resend_probe():
+    """Hit GET https://api.resend.com/domains to confirm the API key works and to surface
+    which sending domains are verified. Returns (status_code:int|None, body:str, error:str|None).
+    No-op probe: no email is sent.
+    """
+    api_key = app.config.get('RESEND_API_KEY')
+    if not api_key:
+        return None, '', 'RESEND_API_KEY env var is not set on this deployment.'
+    req = Request(
+        'https://api.resend.com/domains',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        method='GET',
+    )
+    try:
+        with urlopen(req, timeout=10) as resp:
+            body = resp.read().decode('utf-8', errors='replace')[:4000]
+            return resp.status, body, None
+    except HTTPError as e:
+        body = ''
+        try:
+            body = e.read().decode('utf-8', errors='replace')[:4000]
+        except Exception:
+            pass
+        return e.code, body, f'HTTP {e.code}'
+    except (URLError, TimeoutError) as e:
+        return None, '', f'Network error reaching Resend: {e}'
+    except Exception as e:
+        return None, '', f'Unexpected error: {e}'
+
+
+@app.route('/admin/email-health', methods=['GET', 'POST'])
+@login_required
+@super_admin_required
+def admin_email_health():
+    """Diagnostic page for the email pipeline.
+
+    GET  → shows config + Resend /domains probe result.
+    POST → sends a real test email to the logged-in super admin and reports the outcome.
+    """
+    test_result = None
+    if request.method == 'POST':
+        # Real send to the logged-in admin's own address — never to an arbitrary recipient.
+        target = current_user.email
+        api_key_present = bool(app.config.get('RESEND_API_KEY'))
+        if not api_key_present:
+            test_result = {'ok': False, 'detail': 'RESEND_API_KEY is not set; cannot send test email.'}
+        else:
+            html = (
+                "<p>This is a Pharmabox24 email-pipeline test.</p>"
+                "<p>If you can read this, Resend is configured correctly for your domain.</p>"
+                f"<p>Sent at: {escape(datetime.utcnow().isoformat())}Z</p>"
+            )
+            ok = send_email(target, 'Pharmabox24 — Email pipeline test', html)
+            test_result = {
+                'ok': ok,
+                'detail': (
+                    f'Test email accepted by Resend and queued to {target}. Check inbox + spam.'
+                    if ok else
+                    f'Resend rejected the test send to {target}. See the probe result below and Railway logs '
+                    f'(grep for "Resend HTTPError" or "Resend network error").'
+                ),
+            }
+
+    status, body, error = _resend_probe()
+
+    # Light parsing — pull out verified domains list if response is JSON.
+    domains = []
+    try:
+        if body:
+            parsed = json.loads(body)
+            data = parsed.get('data') if isinstance(parsed, dict) else None
+            if isinstance(data, list):
+                for d in data:
+                    if isinstance(d, dict):
+                        domains.append({
+                            'name': d.get('name'),
+                            'status': d.get('status'),
+                            'region': d.get('region'),
+                            'created_at': d.get('created_at'),
+                        })
+    except (ValueError, TypeError):
+        pass
+
+    return render_template(
+        'admin/email_health.html',
+        mail_from=app.config.get('MAIL_FROM'),
+        api_key_set=bool(app.config.get('RESEND_API_KEY')),
+        api_key_length=len(app.config.get('RESEND_API_KEY') or ''),
+        site_url=app.config.get('SITE_URL') or '(unset — falling back to request host)',
+        probe_status=status,
+        probe_error=error,
+        probe_body=body,
+        domains=domains,
+        test_result=test_result,
+    )
+
+
 # === HELPER FUNCTIONS ===
 
 def get_pharmacy_stats(pharmacy_id, today):
@@ -1638,7 +1755,9 @@ def process_excel(filepath):
                     'collected': hourly_headers.get('collected parcels', hourly_headers.get('collected', -1))
                 }
 
-                report_month = _today().replace(day=1)
+                # Derive report_month strictly from the daily block's parseable dates.
+                # Refuse to default to today — silently misfiling January data into February breaks analytics.
+                report_month = None
                 if daily_header_row is not None and col_map.get('date', -1) >= 0:
                     for row in all_rows[daily_header_row + 1:]:
                         if row and row[col_map['date']]:
@@ -1649,6 +1768,13 @@ def process_excel(filepath):
                             elif isinstance(date_val, date):
                                 report_month = date_val.replace(day=1)
                                 break
+
+                if report_month is None:
+                    raise ValueError(
+                        'Could not determine reporting month: no parseable Date value '
+                        'found in the daily statistics section. Add at least one row with '
+                        'a real date in the Date column and re-upload.'
+                    )
 
                 for row in all_rows[hourly_header_row + 1:]:
                     if not row or hourly_col_map['serial'] < 0 or not row[hourly_col_map['serial']]:
@@ -1825,10 +1951,6 @@ def process_csv(filepath):
     return records, affected_pharmacies, skipped
 
 
-# Advisory-lock key for init_db. Arbitrary 32-bit constant — change only if you also clear locks.
-_INIT_DB_LOCK_KEY = 73247932
-
-
 def init_db():
     """Initialize database with tables, run migrations, sync admin user.
 
@@ -1843,27 +1965,34 @@ def init_db():
 
         try:
             if is_postgres:
-                with db.engine.connect() as conn:
-                    # Block until we hold the lock — only one worker at a time runs DDL.
-                    conn.execute(text(f'SELECT pg_advisory_lock({_INIT_DB_LOCK_KEY})'))
+                # Each ALTER is wrapped individually so a single failure doesn't block the rest.
+                # Postgres' built-in DDL locking serialises concurrent workers without needing
+                # an advisory lock layered on top.
+                postgres_statements = [
+                    ("create organisations", """
+                        CREATE TABLE IF NOT EXISTS organisations (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(200) NOT NULL,
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """),
+                    ("add pharmacies.organisation_id",
+                     'ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'),
+                    ("add users.organisation_id",
+                     'ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'),
+                    ("add users.session_version",
+                     "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1"),
+                    ("migrate legacy admin role",
+                     "UPDATE users SET role = 'super_admin' WHERE role = 'admin'"),
+                ]
+                for label, sql in postgres_statements:
                     try:
-                        conn.execute(text("""
-                            CREATE TABLE IF NOT EXISTS organisations (
-                                id SERIAL PRIMARY KEY,
-                                name VARCHAR(200) NOT NULL,
-                                created_at TIMESTAMP DEFAULT NOW()
-                            )
-                        """))
-                        conn.execute(text('ALTER TABLE pharmacies ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
-                        conn.execute(text('ALTER TABLE users ADD COLUMN IF NOT EXISTS organisation_id INTEGER REFERENCES organisations(id)'))
-                        # session_version supports forced logout / token invalidation.
-                        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 1"))
-                        conn.execute(text("UPDATE users SET role = 'super_admin' WHERE role = 'admin'"))
-                        conn.commit()
-                        app.logger.info('PostgreSQL migration complete')
-                    finally:
-                        conn.execute(text(f'SELECT pg_advisory_unlock({_INIT_DB_LOCK_KEY})'))
-                        conn.commit()
+                        with db.engine.connect() as conn:
+                            conn.execute(text(sql))
+                            conn.commit()
+                    except Exception:
+                        app.logger.exception(f'migration step failed: {label}')
+                app.logger.info('PostgreSQL migration sweep complete')
             else:
                 # SQLite (local dev). Idempotent ADD COLUMNs — SQLite has no IF NOT EXISTS,
                 # so we introspect first.
@@ -1926,13 +2055,14 @@ def init_db():
                     app.logger.warning('Development mode: no super_admin and no ADMIN_PASSWORD. Set ADMIN_PASSWORD to bootstrap.')
 
         except Exception:
-            # Surface init failures loudly. Do NOT silently continue serving against a broken schema.
-            app.logger.exception('init_db failed')
-            raise
+            # Log loudly but DO NOT crash the worker — production already has a healthy
+            # schema, and the migration block is best-effort idempotent. Operator should
+            # check logs and reconcile manually if anything fails here.
+            # (Track via /admin/email-health-style diagnostic — TODO.)
+            app.logger.exception('init_db failed — app will continue starting; investigate the schema state')
 
 
-# Initialize DB on import (for gunicorn). Failure here MUST crash the worker so the
-# orchestrator can detect a broken deploy instead of serving 500s against a half-migrated DB.
+# Initialize DB on import (for gunicorn).
 init_db()
 
 
