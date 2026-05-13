@@ -225,10 +225,10 @@ def _email_layout(preheader, body_html):
     safe_pre = escape(preheader or '')
     logo_block = (
         f'<img src="{escape(logo_url)}" alt="Pharmabox24" '
-        f'style="max-height: 48px; display: block; margin: 0 auto;">'
+        f'style="max-height: 56px; display: block; margin: 0 auto;">'
     ) if logo_url else (
         '<div style="font-family: Arial, sans-serif; font-size: 24px; font-weight: 900; '
-        'color: white; letter-spacing: -1px;">Pharmabox24</div>'
+        'color: #00891a; letter-spacing: -1px;">Pharmabox24</div>'
     )
     return f"""<!DOCTYPE html>
 <html>
@@ -242,19 +242,19 @@ def _email_layout(preheader, body_html):
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
         <tr>
             <td align="center" style="padding: 24px 12px;">
-                <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%;">
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px; width: 100%; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
                     <tr>
-                        <td style="background: linear-gradient(135deg, #00891a, #006913); padding: 24px; text-align: center; border-radius: 8px 8px 0 0;">
+                        <td style="background: #ffffff; padding: 28px 24px 20px; text-align: center; border-bottom: 1px solid #e5e7eb;">
                             {logo_block}
                         </td>
                     </tr>
                     <tr>
-                        <td style="background: #ffffff; padding: 32px 28px; line-height: 1.6; color: #333;">
+                        <td style="background: #ffffff; padding: 28px 28px 32px; line-height: 1.6; color: #333;">
                             {body_html}
                         </td>
                     </tr>
                     <tr>
-                        <td style="background: #f9f9f9; padding: 16px 28px; text-align: center; color: #888; font-size: 12px; border-radius: 0 0 8px 8px;">
+                        <td style="background: #f9fafb; padding: 16px 28px; text-align: center; color: #888; font-size: 12px; border-top: 1px solid #e5e7eb;">
                             Pharmabox24 — Prescription Collection Analytics Portal
                         </td>
                     </tr>
