@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Pharmabox24{% endblock %}</title>
-    <!-- SRI temporarily disabled on all CDN scripts — see HANDOFF.md § 5.2.
-         crossorigin="anonymous" also dropped (was paired with the removed integrity= attrs;
-         keeping it caused stale SRI-failure cache entries to persist in some browsers). -->
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+    <!-- Alpine.js removed 2026-05-13. It was only used for the user dropdown in this file;
+         replaced with a tiny vanilla-JS handler at the bottom of <body>. One fewer CDN
+         dependency, one fewer attack surface, no more cache/SRI fights.
+         Tailwind and Chart.js stay on CDN for now — see HANDOFF.md § 4.2 #15. -->
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script>
         tailwind.config = {
@@ -55,8 +55,8 @@
                     <img src="{{ url_for('static', filename='images/logo.png') }}" alt="Pharmabox24" class="h-10">
                 </div>
                 <div class="flex items-center space-x-4">
-                    <div class="relative" x-data="{ open: false }">
-                        <button @click="open = !open" class="flex items-center text-gray-600 hover:text-gray-800 focus:outline-none">
+                    <div class="relative" data-user-menu>
+                        <button type="button" data-user-menu-button class="flex items-center text-gray-600 hover:text-gray-800 focus:outline-none">
                             <i class="fas fa-user mr-1"></i>
                             {{ current_user.name }}
                             {% if current_user.is_super_admin() %}
@@ -66,7 +66,7 @@
                             {% endif %}
                             <i class="fas fa-chevron-down ml-2 text-xs"></i>
                         </button>
-                        <div x-show="open" @click.away="open = false" x-transition
+                        <div data-user-menu-panel hidden
                              class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg py-1 z-50 border border-gray-200">
                             <a href="{{ url_for('change_password') }}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
                                 <i class="fas fa-key mr-2 text-gray-400"></i> Change Password
@@ -175,5 +175,26 @@
     {% endif %}
 
     {% block scripts %}{% endblock %}
+
+    <script>
+        // User-menu dropdown (replaces previous Alpine.js binding).
+        (function () {
+            var root = document.querySelector('[data-user-menu]');
+            if (!root) return;
+            var button = root.querySelector('[data-user-menu-button]');
+            var panel = root.querySelector('[data-user-menu-panel]');
+            if (!button || !panel) return;
+            button.addEventListener('click', function (e) {
+                e.stopPropagation();
+                panel.hidden = !panel.hidden;
+            });
+            document.addEventListener('click', function (e) {
+                if (!root.contains(e.target)) panel.hidden = true;
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') panel.hidden = true;
+            });
+        })();
+    </script>
 </body>
 </html>
