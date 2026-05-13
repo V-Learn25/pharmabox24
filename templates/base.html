@@ -8,9 +8,10 @@
             src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"
             integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb"
             crossorigin="anonymous"></script>
-    <script src="https://cdn.tailwindcss.com/3.4.17"
-            integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K"
-            crossorigin="anonymous"></script>
+    <!-- Tailwind via cdn.tailwindcss.com is a runtime JIT compiler that serves
+         different bytes per browser/user-agent. SRI cannot be applied here.
+         Proper fix is to compile Tailwind at build time and serve a static CSS file. -->
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script>
         tailwind.config = {
             theme: {
