@@ -832,11 +832,8 @@ def org_dashboard():
         db.func.sum(DailyStat.removed_parcels)
     ).filter(DailyStat.pharmacy_id.in_(pharmacy_ids), DailyStat.date >= thirty_days_ago).first() if pharmacy_ids else (0, 0, 0)
 
-    pharmacy_summaries = []
-    for pharmacy in pharmacies:
-        summary = get_pharmacy_stats(pharmacy.id, today)
-        summary['pharmacy'] = pharmacy
-        pharmacy_summaries.append(summary)
+    # Batched per-pharmacy stats: 4 queries total regardless of pharmacy count.
+    pharmacy_summaries = get_pharmacy_stats_batch(pharmacies, today)
 
     stats = {
         'total_pharmacies': len(pharmacies),
@@ -1026,11 +1023,8 @@ def admin_dashboard():
         db.func.sum(DailyStat.removed_parcels)
     ).filter(DailyStat.date >= thirty_days_ago).first()
 
-    pharmacy_summaries = []
-    for pharmacy in pharmacies:
-        summary = get_pharmacy_stats(pharmacy.id, today)
-        summary['pharmacy'] = pharmacy
-        pharmacy_summaries.append(summary)
+    # Batched per-pharmacy stats: 4 queries total regardless of pharmacy count.
+    pharmacy_summaries = get_pharmacy_stats_batch(pharmacies, today)
 
     recent_uploads = Upload.query.order_by(Upload.uploaded_at.desc()).limit(5).all()
 
@@ -1515,6 +1509,84 @@ def admin_email_health():
 
 
 # === HELPER FUNCTIONS ===
+
+_EMPTY_BUCKET = {'loaded': 0, 'collected': 0, 'removed': 0, 'reminders': 0}
+
+
+def _empty_summary():
+    return {
+        'today': dict(_EMPTY_BUCKET),
+        'yesterday': dict(_EMPTY_BUCKET),
+        'week': dict(_EMPTY_BUCKET),
+        'month': dict(_EMPTY_BUCKET),
+    }
+
+
+def get_pharmacy_stats_batch(pharmacies, today):
+    """Compute today/yesterday/week/month stats for many pharmacies in 4 grouped queries
+    instead of N×4 per-pharmacy queries. recent_records is intentionally omitted — it's
+    only needed on the per-pharmacy detail page, never on list/dashboard views.
+
+    Returns a list of summary dicts in the same order as `pharmacies`, each with a
+    `pharmacy` key attached.
+    """
+    if not pharmacies:
+        return []
+
+    ids = [p.id for p in pharmacies]
+    yesterday = today - timedelta(days=1)
+    seven_days_ago = today - timedelta(days=7)
+    thirty_days_ago = today - timedelta(days=30)
+
+    # Query 1: today rows (one per pharmacy that has data today)
+    today_rows = DailyStat.query.filter(
+        DailyStat.pharmacy_id.in_(ids), DailyStat.date == today
+    ).all()
+    today_by_id = {r.pharmacy_id: r for r in today_rows}
+
+    # Query 2: yesterday rows
+    y_rows = DailyStat.query.filter(
+        DailyStat.pharmacy_id.in_(ids), DailyStat.date == yesterday
+    ).all()
+    yesterday_by_id = {r.pharmacy_id: r for r in y_rows}
+
+    def _aggregate_per_pharmacy(since_date):
+        rows = db.session.query(
+            DailyStat.pharmacy_id,
+            db.func.coalesce(db.func.sum(DailyStat.loaded_parcels), 0),
+            db.func.coalesce(db.func.sum(DailyStat.collected_parcels), 0),
+            db.func.coalesce(db.func.sum(DailyStat.removed_parcels), 0),
+            db.func.coalesce(db.func.sum(DailyStat.reminders_sum), 0),
+        ).filter(
+            DailyStat.pharmacy_id.in_(ids),
+            DailyStat.date >= since_date,
+        ).group_by(DailyStat.pharmacy_id).all()
+        return {r[0]: {'loaded': int(r[1]), 'collected': int(r[2]),
+                        'removed': int(r[3]), 'reminders': int(r[4])} for r in rows}
+
+    # Query 3 + 4: week and month aggregates grouped by pharmacy_id
+    week_by_id = _aggregate_per_pharmacy(seven_days_ago)
+    month_by_id = _aggregate_per_pharmacy(thirty_days_ago)
+
+    summaries = []
+    for p in pharmacies:
+        s = _empty_summary()
+        s['pharmacy'] = p
+        t = today_by_id.get(p.id)
+        if t:
+            s['today'] = {'loaded': t.loaded_parcels, 'collected': t.collected_parcels,
+                          'removed': t.removed_parcels, 'reminders': t.reminders_sum}
+        y = yesterday_by_id.get(p.id)
+        if y:
+            s['yesterday'] = {'loaded': y.loaded_parcels, 'collected': y.collected_parcels,
+                              'removed': y.removed_parcels, 'reminders': y.reminders_sum}
+        if p.id in week_by_id:
+            s['week'] = week_by_id[p.id]
+        if p.id in month_by_id:
+            s['month'] = month_by_id[p.id]
+        summaries.append(s)
+    return summaries
+
 
 def get_pharmacy_stats(pharmacy_id, today):
     yesterday = today - timedelta(days=1)
