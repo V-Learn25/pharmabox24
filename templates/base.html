@@ -4,13 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Pharmabox24{% endblock %}</title>
+    <!-- SRI temporarily disabled on all CDN scripts — see HANDOFF.md § 5.2.
+         The hashes I computed via curl didn't match what browsers actually receive
+         (likely due to jsdelivr's content negotiation). Re-enable once we self-host. -->
     <script defer
             src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"
-            integrity="sha384-X9kJyAubVxnP0hcA+AMMs21U445qsnqhnUF8EBlEpP3a42Kh/JwWjlv2ZcvGfphb"
             crossorigin="anonymous"></script>
-    <!-- Tailwind via cdn.tailwindcss.com is a runtime JIT compiler that serves
-         different bytes per browser/user-agent. SRI cannot be applied here.
-         Proper fix is to compile Tailwind at build time and serve a static CSS file. -->
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script>
         tailwind.config = {
@@ -35,11 +34,9 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7"
-            integrity="sha384-vsrfeLOOY6KuIYKDlmVH5UiBmgIdB1oEf7p01YgWHuqmOHfZr374+odEv96n9tNC"
             crossorigin="anonymous"></script>
     <link rel="stylesheet"
           href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
-          integrity="sha384-t1nt8BQoYMLFN5p42tRAtuAAFQaCQODekUVeKKZrEnEyp4H2R0RHFz0KWpmj7i8g"
           crossorigin="anonymous">
     <style>
         .sidebar { min-height: calc(100vh - 64px); }
