@@ -199,6 +199,21 @@ If you ever clone fresh and find `requirements.txt`/`runtime.txt` missing but `r
 - **Alpine.js was removed entirely** — it was only used in one place (the user-menu dropdown in base.html). Replaced with 12 lines of inline vanilla JS at the bottom of `<body>`. One fewer CDN dependency, one fewer supply-chain attack surface.
 - Tailwind, Chart.js, Font Awesome remain on CDN. Self-hosting them is the proper fix (#15 in § 4.2) — requires an npm/PostCSS build pipeline on Railway.
 
+### 5.2.5 Migration runs once per deploy, not per worker boot
+The web container is started by `start.sh` (Procfile + railway.json both point at it). The script:
+1. Runs `init_db()` ONCE up-front (Postgres migration sweep + admin sync — typically 1-3 seconds).
+2. Sets `SKIP_INIT_DB=1`, then `exec`s gunicorn.
+3. When gunicorn imports `app.py`, the embedded `init_db()` call is skipped (gated on that env var).
+4. Workers boot in <1s. Rolling deploys are smooth.
+
+Why: previously every gunicorn worker ran the migration sweep on import. During rolling deploys, requests landing on a still-booting worker stalled long enough to trigger Railway's 502 page (reported 2026-05-13).
+
+**Local dev** (no start.sh wrapper, no `SKIP_INIT_DB` env var) still runs init_db at import time as before — `python app.py` continues to work for development.
+
+**Gunicorn flags** in `start.sh`:
+- `--timeout 60` (was 30s default) — generous headroom; never silently kills a worker mid-request
+- `--graceful-timeout 30` — rolling deploys drain in-flight requests cleanly
+
 ### 5.3 Init_db is log-and-continue
 The audit recommendation was "fail loudly on init errors." We tried that and a UniqueViolation on admin-sync crashed every worker on deploy. Current behaviour: log full traceback to Railway, keep workers serving. Trade-off: bad migration could silently leave the app running against a half-migrated schema. The migration steps are all idempotent (`IF NOT EXISTS`) so this is acceptable.
 

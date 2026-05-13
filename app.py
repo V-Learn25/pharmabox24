@@ -2531,8 +2531,14 @@ def init_db():
             app.logger.exception('init_db failed — app will continue starting; investigate the schema state')
 
 
-# Initialize DB on import (for gunicorn).
-init_db()
+# Initialize DB on import — UNLESS we're being imported by gunicorn after start.sh
+# already ran init_db separately (the production path on Railway). This avoids running
+# the migration sweep + admin sync inside every web worker on every restart, which
+# was causing "Railway 502 during click" reports during rolling deploys.
+#
+# Local dev (no start.sh wrapper) still runs init_db at import time as before.
+if os.environ.get('SKIP_INIT_DB') != '1':
+    init_db()
 
 
 if __name__ == '__main__':
